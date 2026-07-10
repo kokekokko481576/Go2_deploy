@@ -1,0 +1,30 @@
+services:
+  ros2:
+    build: .
+    image: arbeit-ros2:humble
+    container_name: arbeit-ros2
+    # ros2_ws はホスト側(リポジトリ直下)に置き、コンテナを消してもコードが残るようにする
+    volumes:
+      - ../ros2_ws:/home/ros/ros2_ws
+      # --- Ubuntu で GUI を使う場合は次の行を有効化(Macでは不要) ---
+      # - /tmp/.X11-unix:/tmp/.X11-unix
+    environment:
+      # [Mac] GUI(RViz/Gazebo)は XQuartz 経由。XQuartz を起動し、ホストで
+      #   xhost +localhost
+      # を実行しておく(docker/README.md 参照)
+      - DISPLAY=${DISPLAY:-host.docker.internal:0}
+      # [Ubuntu] 上の DISPLAY 行をコメントアウトして次を有効化。ホストで xhost +local:docker
+      # - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - ROS_DOMAIN_ID=0
+    stdin_open: true
+    tty: true
+    command: bash
+    # 実機Go2(有線LAN・DDS)と通信する場合はホストネットワークが必要。
+    # [Ubuntu] そのままコメントを外せば使える(推奨)
+    # [Mac]    Docker Desktop 4.34以降 + 設定で "Enable host networking" を有効化が必要
+    # シミュレーションだけならコメントアウトのままで良い。
+    # network_mode: host
+    # --- Ubuntu + NVIDIA GPU 機で描画を速くする場合(nvidia-container-toolkit 導入後) ---
+    # gpus: all
