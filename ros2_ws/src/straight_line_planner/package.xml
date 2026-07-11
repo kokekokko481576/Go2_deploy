@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>straight_line_planner</name>
+  <version>0.1.0</version>
+  <description>
+    経路生成計画 Phase1 M1: 自己位置から目標作業姿勢までの直線補間Pathを出すノード。
+    トピック名・型はNav2互換(geometry_msgs/PoseStamped購読、nav_msgs/Path配信)とし、
+    Phase2でplanner serverに差し替えても経路追従側のI/Fが変わらない状態を保つ。
+  </description>
+  <maintainer email="koga_koichiro@naoe.eng.osaka-u.ac.jp">koga_koichiro</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>tf2_ros</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
