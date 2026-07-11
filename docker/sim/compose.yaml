@@ -1,0 +1,35 @@
+# simコンテナ: Gazebo(Harmonic) + Go2モデル + Nav2 (docs/docker要件定義.md §4.1)
+# ビルドコンテキストはリポジトリルート(../.. from this file)。
+# upstream(go2_ros2_sim_py)はNVIDIA GPU前提だが、本開発機はiGPU(NVIDIA非搭載)のため
+# GPU予約はせず /dev/dri を渡す構成を既定にする(要件定義 R4)。
+# NVIDIA環境で使う場合は下部の deploy.resources をコメントアウトして有効化する。
+services:
+  sim:
+    build:
+      context: ../..
+      dockerfile: docker/sim/Dockerfile
+    image: go2-sim:jazzy
+    container_name: go2-sim
+    network_mode: host
+    ipc: host
+    stdin_open: true
+    tty: true
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - ROS_DOMAIN_ID=0
+      - GZ_SIM_RESOURCE_PATH=/root/ws/src/gazebo_sim/models
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    devices:
+      - /dev/dri:/dev/dri
+    command: bash -c "source install/setup.bash && ros2 launch gazebo_sim launch.py use_sim_time:=true"
+    # --- NVIDIA GPU機で使う場合(nvidia-container-toolkit導入後、上のdevices/commandは共存可) ---
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu, graphics, utility, compute, video]
