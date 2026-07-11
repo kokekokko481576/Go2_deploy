@@ -3,3 +3,6 @@
 	url = git@github.com:AI-Robot-Book-Humble/chapter1.git
 	update = none
 	ignore = all
+[submodule "external/go2_ros2_sim_py"]
+	path = external/go2_ros2_sim_py
+	url = https://github.com/abutalipovvv/go2_ros2_sim_py.git
