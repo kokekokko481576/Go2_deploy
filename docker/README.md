@@ -10,10 +10,10 @@ ROS2 Humble + Nav2 + robot_localization + slam_toolbox + Gazebo など、
 |------|------|
 | ROS2 Humble での開発・ビルド（colcon） | ○ |
 | Nav2（planner / controller server）の構成・検証 | ○ |
-| Gazebo シミュレーション（新 Gazebo = Fortress。Mac では GPU なし・低速） | △ |
-| RViz2 などの GUI（XQuartz 経由） | △ |
-| Isaac Sim / Isaac Lab | × NVIDIA GPU 必須。Mac では不可（GPU 搭載 Linux 機で別途） |
-| 実機 Go2 との DDS 通信 | △ ホストネットワーク設定が必要（下記） |
+| Gazebo シミュレーション（新 Gazebo = Fortress。コマンドは `ign gazebo`、`gz` ではない） | ○ Ubuntu+iGPU / △ Mac（GPU なし・低速） |
+| RViz2 などの GUI | ○ Ubuntu（ネイティブX11・iGPUでOpenGL 4.6を確認） / △ Mac（XQuartz 経由） |
+| Isaac Sim / Isaac Lab | × NVIDIA GPU 必須。本イメージ・本開発機（iGPUのみ）では不可（GPU 搭載 Linux 機で別途） |
+| 実機 Go2 との DDS 通信 | ○ Ubuntu（`network_mode: host` 有効化済み） / △ Mac（ホストネットワーク設定に制約） |
 
 ## 使い方
 
@@ -40,23 +40,31 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-## GUI（RViz2 / Gazebo）を使う場合（macOS）
+## GUI（RViz2 / Gazebo）を使う場合
+
+### Ubuntu（確認済み・既定設定）
+
+1. ホストのターミナルで `xhost +local:docker`（再起動後は再実行が必要）
+2. コンテナ内で `rviz2` または `ign gazebo`（Fortressのコマンドは `gz` ではなく `ign gazebo`）
+
+`DISPLAY=${DISPLAY}` と `/tmp/.X11-unix` マウント、iGPU(`/dev/dri`)渡し込みは compose.yaml で有効化済み。
+iGPU機での実機確認で `OpenGl version: 4.6` を確認済み（ソフトウェアレンダリングにフォールバックしない）。
+
+### macOS
 
 1. XQuartz をインストールして起動（`brew install --cask xquartz`）
 2. XQuartz の設定 →「セキュリティ」→「ネットワーク・クライアントからの接続を許可」を有効化して再起動
 3. ホストのターミナルで `xhost +localhost`
-4. コンテナ内で `rviz2`
-
-DISPLAY は compose.yaml で `host.docker.internal:0` に設定済み。
+4. compose.yaml の DISPLAY 行を Mac 用（`host.docker.internal:0`、コメントで残置）に切り替えてから `rviz2`
 
 ## 実機 Go2 と通信する場合
 
 - unitree_ros2 は CycloneDDS 前提（`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` 設定済み）。
   unitree_ros2 自体は `ros2_ws/src` に clone して colcon build する（同梱していない）
-- DDS のマルチキャストがコンテナ境界を越えられないため、macOS では
-  Docker Desktop 4.34+ の "Enable host networking" を有効にした上で
-  compose.yaml の `network_mode: host` のコメントを外す
-- それでも不安定な場合、実機接続は Linux 機（ネイティブ or Docker --net=host）を推奨
+- DDS のマルチキャストがコンテナ境界を越えられないため、`network_mode: host` が必要
+  - Ubuntu: compose.yaml で有効化済み（確認済み）
+  - macOS: Docker Desktop 4.34+ の "Enable host networking" を有効にする必要があり、制約が残る。
+    実機接続は Linux 機（ネイティブ or Docker --net=host）を推奨
 
 ## 含まれる主なパッケージと計画書の対応
 
