@@ -5,7 +5,7 @@
 	ignore = all
 [submodule "external/go2_ros2_sim_py"]
 	path = external/go2_ros2_sim_py
-	url = https://github.com/abutalipovvv/go2_ros2_sim_py.git
+	url = git@github.com:kokekokko481576/go2_ros2_sim_py.git
 [submodule "external/unitree_ros2"]
 	path = external/unitree_ros2
 	url = https://github.com/unitreerobotics/unitree_ros2.git
