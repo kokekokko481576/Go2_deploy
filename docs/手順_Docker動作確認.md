@@ -178,6 +178,11 @@ xhost +local:docker
 - NVIDIA GPU機での `gpus: all` 検証（本機はNVIDIA非搭載のため対象外）
 - go2_ros2_sim_py の実速度検証（`docker要件定義.md` 未決事項。sim/driverコンテナ自体が未着手）
 
+## 5.2 driverコンテナ（unitree_ros2 + CycloneDDS、実機なし動作確認済み・2026-07-12）
+
+本書の対象は `docker/`(dev/シミュレーション用)。実機通信用の `docker/driver/` は構成・
+動作確認結果とも別文書 `docker/driver/README.md` を参照。
+
 ## 6. よく使うコマンド早見表
 
 | やりたいこと | コマンド（ホスト側 `docker/` で） |
@@ -201,3 +206,4 @@ xhost +local:docker
 
 - 2026-07-10: 初版作成（Mac動作確認済み。Ubuntu節は未実施・明日以降に検証）
 - 2026-07-12: Ubuntu機（22.04, x86_64, iGPU）で§5を実施。compose.yamlをUbuntu既定設定に更新（network_mode: host・X11・/dev/dri）し、§2・§3全項目 + RViz2 + Gazebo(Ignition)の起動を確認
+- 2026-07-12: driverコンテナ(`docker/driver/`)のビルド・ループバックでの動作確認を実施。詳細は§5.2・`docker/driver/README.md`参照
