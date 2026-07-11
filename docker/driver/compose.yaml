@@ -1,0 +1,18 @@
+# driverコンテナ: unitree_ros2 + CycloneDDS 0.10.x固定 (docs/docker要件定義.md §4.2)
+# ビルドコンテキストはリポジトリルート(../.. from this file)。
+services:
+  driver:
+    build:
+      context: ../..
+      dockerfile: docker/driver/Dockerfile
+    image: go2-driver:humble
+    container_name: go2-driver
+    network_mode: host
+    stdin_open: true
+    tty: true
+    environment:
+      # 実機Go2と有線LAN接続する場合は実際のNIC名(例: enp3s0)に上書きする。
+      # 未接続でのビルド・コマンド確認のみなら既定の "lo" のままでよい。
+      - GO2_NIC=${GO2_NIC:-lo}
+      - ROS_DOMAIN_ID=0
+    command: bash
