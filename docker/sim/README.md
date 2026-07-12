@@ -67,15 +67,17 @@ docker compose stop
 - 長時間稼働時の安定性
 - ホストのメモリ・ディスクが逼迫している状態での再現性(検証時はディスク17GB・メモリ余裕を確保した状態で実施)
 
-## 顎LiDAR動作確認結果(2026-07-12、ヘッドレスGazeboでの確認。GUI環境なしのため点群の目視は未実施)
+## 顎LiDAR動作確認結果(2026-07-12)
 
 - ヘッドレス(`gz sim -s`)でのGazebo起動 + `chin_lidar`センサのロードをエラーなく確認
   (既存のlaser/imu/cameraと同一の`gz_frame_id`警告のみ。新規の警告・エラーは発生していない)
 - `ros_gz_bridge`が`/robot1/chin_lidar/scan/points`(`PointCloud2`⇔`gz.msgs.PointCloudPacked`)の
   ブリッジを正常に生成することを確認
+- 実デスクトップでの`docker compose up -d`(GUIあり)でRViz2にPointCloud2表示
+  (`/robot1/chin_lidar/scan/points`)を追加し、点群が実際に流れていることを目視確認。
+  垂直16chが下向きピッチで地面に多重の円弧を描く、意図通りの3D LiDARらしい点群形状になっていた
 
 未実施:
 
-- 実際に点群データが妥当な内容で流れているかの目視確認(RViz2。DISPLAY無しの検証環境のため、
-  実デスクトップでの`docker compose up -d`時に別途確認する)
 - 搭載位置・ピッチ・FOVの実機スペックとの整合(上記「本体との差分」節のとおり全て仮値)
+- 水平FOVは既存2D LiDARの設定(360°全周)を暫定的に引き継いだまま(実機確定時に前方限定等へ見直す想定)
