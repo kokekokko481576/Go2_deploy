@@ -29,6 +29,17 @@ docker compose stop
 
 ## 本体(upstream)との差分・注意点
 
+- **`external/go2_ros2_sim_py` は自分のfork(`kokekokko481576/go2_ros2_sim_py`、public)を参照**。
+  理由: 顎3D LiDAR追加(下記)がxacro/launch本体の編集を要し、他コンテナのようなcompose override
+  では対応できないため。upstreamへのPR送付は意図していない。submoduleの`upstream`リモートに
+  元リポジトリを残してあり、upstream更新の追従自体は今後も可能
+- **顎(chin)搭載3D LiDARを追加(2026-07-12)**: `go2_description/xacro/robot.xacro`に
+  `chin_lidar_frame`リンク、`gazebo.xacro`に垂直スキャン付き`gpu_lidar`センサを追加し、
+  `gazebo_multi_nav2_world.launch.py`のros_gz_bridgeに`PointCloud2`のブリッジ行を追加した。
+  トピックは`/robot1/chin_lidar/scan/points`(`sensor_msgs/msg/PointCloud2`)。
+  **搭載位置(base_link相対 x=0.29, z=-0.06)・下向きピッチ・垂直FOV(16ch, ±15°)は
+  実機スペックの根拠が無い仮値**(未使用の在庫URDFの`Head_lower`を流用)。実機の顎LiDAR型番・
+  搭載位置が確定次第、`go2_description/xacro/gazebo.xacro`の`chin_lidar`センサ定義を要更新
 - **ROS2ディストロはJazzy固定**（go2_ros2_sim_py自体がJazzy前提。README記載）。
   プロジェクト全体のHumble固定(unitree_ros2の都合、`docker/`のdevコンテナ)とは別に、
   simコンテナだけ独立してJazzy+Gazebo Harmonicで動かす。cmd_vel等の標準メッセージ型は
@@ -55,3 +66,16 @@ docker compose stop
 - 実際のNav2目標到達・障害物回避などシナリオレベルの検証(今回は起動確認とRTF計測のみ)
 - 長時間稼働時の安定性
 - ホストのメモリ・ディスクが逼迫している状態での再現性(検証時はディスク17GB・メモリ余裕を確保した状態で実施)
+
+## 顎LiDAR動作確認結果(2026-07-12、ヘッドレスGazeboでの確認。GUI環境なしのため点群の目視は未実施)
+
+- ヘッドレス(`gz sim -s`)でのGazebo起動 + `chin_lidar`センサのロードをエラーなく確認
+  (既存のlaser/imu/cameraと同一の`gz_frame_id`警告のみ。新規の警告・エラーは発生していない)
+- `ros_gz_bridge`が`/robot1/chin_lidar/scan/points`(`PointCloud2`⇔`gz.msgs.PointCloudPacked`)の
+  ブリッジを正常に生成することを確認
+
+未実施:
+
+- 実際に点群データが妥当な内容で流れているかの目視確認(RViz2。DISPLAY無しの検証環境のため、
+  実デスクトップでの`docker compose up -d`時に別途確認する)
+- 搭載位置・ピッチ・FOVの実機スペックとの整合(上記「本体との差分」節のとおり全て仮値)
