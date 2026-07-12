@@ -41,8 +41,20 @@ devコンテナ内で確認:
 - `cmd_vel_raw`のpublishを止めると、0.51秒後(ウォッチドッグ閾値0.5s超過)に`cmd_vel`が
   ゼロへ切り替わることを確認。警告ログは状態遷移時に1回だけ出る(スパムしない)
 
+Gazebo連携での確認(devコンテナ=Humble + simコンテナ=Jazzy、別コンテナ・別ROS2ディストロ間):
+
+- 出力トピックを`/robot1/cmd_vel`にリマップして起動し、`cmd_vel_raw`にvx=0.5・wz=0.3を送信 →
+  Gazebo上のGo2が実際に前進+旋回し、RViz2上の顎LiDAR点群も連動して変化することを目視確認
+  (`ROS_DOMAIN_ID`・`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`が両コンテナで一致していれば、
+  Humble⇔Jazzyでも標準メッセージ型は問題なく届く)
+- 上記の際、`ros2 topic echo /robot1/cmd_vel`で`invalid data size`/`string data is not
+  null-terminated`というCycloneDDSの警告が繰り返し出た(Humble⇔JazzyのXTypes関連の既知の
+  相性問題と思われる)。値は正しく届き実際にロボットも正常に動いたため実害は無さそうだが、
+  もし今後cmd_vel以外の型でも同様の警告が問題になる場合は要調査
+- コマンド停止後、ウォッチドッグ(0.52秒後)でロボットが実際に停止することも確認
+
 未実施:
 
-- 実機・Gazeboでの速度応答(遅れ・立ち上がり)込みの検証(計画書3.2-4)
+- 実機での速度応答(遅れ・立ち上がり)込みの検証(計画書3.2-4)
 - 無線非常停止(ハードウェア)
-- テレオペ・Nav2コントローラからの実際のcmd_vel_rawとの結合
+- テレオペ・Nav2コントローラからの実際のcmd_vel_rawとの結合(今回は`ros2 topic pub`での手動注入)

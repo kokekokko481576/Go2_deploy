@@ -27,6 +27,11 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/ro
 docker compose stop
 ```
 
+**注意**: Gazebo GUIの「Reset」ボタン(World > Reset / 左下の巻き戻しアイコン)を押すと、
+ロボット(`robot1_my_bot`)はワールドファイル(`cafe.world`)に含まれず起動後に動的にspawnされた
+存在のため、**消えたまま復活しない**。ロボットが消えた場合は`docker compose restart`で
+launchシーケンス(spawn含む)をやり直す必要がある。
+
 ## 本体(upstream)との差分・注意点
 
 - **`external/go2_ros2_sim_py` は自分のfork(`kokekokko481576/go2_ros2_sim_py`、public)を参照**。
