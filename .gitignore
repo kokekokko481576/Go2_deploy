@@ -3,3 +3,16 @@ ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
 __pycache__/
+*.pyc
+
+# エディタ・OSが生成する一時ファイル(Mac/Ubuntu両対応で開発しているため)
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Obsidian: ウィンドウ状態などローカル限定の情報。共有設定(appearance/core-plugins等)は追跡する
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
