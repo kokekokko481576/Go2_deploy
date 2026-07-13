@@ -1,0 +1,54 @@
+amcl:
+  ros__parameters:
+    use_sim_time: true
+
+    # upstream(sim)側が同じmap/odom/base_linkフレームで既にAMCLを動かしているため、
+    # tf衝突を避けてtf配信はせず、amcl_poseトピックの出力のみ行う
+    tf_broadcast: false
+
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+
+    # 顎LiDAR由来の2Dスキャン(pointcloud_to_laserscanの出力)を絶対パスで直接指定
+    scan_topic: "/go2_localization/chin_lidar_scan"
+
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+
+    laser_max_range: 30.0
+    laser_min_range: 0.1
+    laser_model_type: "likelihood_field"
+    laser_likelihood_max_dist: 2.0
+    max_beams: 60
+
+    max_particles: 2000
+    min_particles: 500
+    update_min_a: 0.2
+    update_min_d: 0.25
+    resample_interval: 1
+    transform_tolerance: 1.0
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    save_pose_rate: 0.5
+    set_initial_pose: true
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      yaw: 0.0
+
+map_server:
+  ros__parameters:
+    use_sim_time: true
+    yaml_filename: ""
+
+lifecycle_manager_localization:
+  ros__parameters:
+    use_sim_time: true
+    autostart: true
+    node_names: ["map_server", "amcl"]

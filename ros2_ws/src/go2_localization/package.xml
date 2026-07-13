@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>go2_localization</name>
+  <version>0.1.0</version>
+  <description>
+    自己位置推定 練習(自M1・自M2)用のbringupパッケージ。自作ノードは持たず、
+    robot_localization(EKF)・pointcloud_to_laserscan・nav2_amcl/nav2_map_serverの
+    設定ファイル+launchファイルのみで構成する。simコンテナ(go2_ros2_sim_py)が
+    既に独自のNav2フルスタック(EKF+AMCL)を起動しているため、tf衝突を避けるべく
+    publish_tf/tf_broadcastをfalseにし、推定結果は/go2_localization/以下の
+    トピックとしてのみ出力する。
+  </description>
+  <maintainer email="koga_koichiro@naoe.eng.osaka-u.ac.jp">koga_koichiro</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>robot_localization</depend>
+  <depend>pointcloud_to_laserscan</depend>
+  <depend>nav2_amcl</depend>
+  <depend>nav2_map_server</depend>
+  <depend>nav2_lifecycle_manager</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
