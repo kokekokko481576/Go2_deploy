@@ -40,6 +40,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gdb \
     iputils-ping \
     net-tools \
+    tree \
+    htop \
+    tmux \
+    wget \
+    unzip \
+    jq \
+    ripgrep \
+    fd-find \
+    bat \
     python3-pip \
     python3-colcon-common-extensions \
     python3-rosdep \
@@ -59,6 +68,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-rqt-graph \
     ros-humble-rmw-cyclonedds-cpp \
     && rm -rf /var/lib/apt/lists/*
+
+# Ubuntu の fd-find/bat パッケージは実行ファイル名が fdfind/batcat になるため、
+# 通常名(fd/bat)でも呼べるようにリンクしておく
+RUN ln -s $(command -v fdfind) /usr/local/bin/fd \
+    && ln -s $(command -v batcat) /usr/local/bin/bat
 
 # --- 非rootユーザ ---
 ARG USERNAME=ros

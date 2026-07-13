@@ -61,7 +61,22 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     ros-jazzy-tf2-ros \
     ros-jazzy-tf2 \
     python3-colcon-common-extensions \
+    tree \
+    htop \
+    tmux \
+    curl \
+    wget \
+    unzip \
+    jq \
+    ripgrep \
+    fd-find \
+    bat \
     && rm -rf /var/lib/apt/lists/*
+
+# Ubuntu の fd-find/bat パッケージは実行ファイル名が fdfind/batcat になるため、
+# 通常名(fd/bat)でも呼べるようにリンクしておく
+RUN ln -s $(command -v fdfind) /usr/local/bin/fd \
+    && ln -s $(command -v batcat) /usr/local/bin/bat
 
 # go2_ros2_sim_py 本体(submodule)をワークスペースへ。colcon-cacheを使わないため
 # submodule内の .git (gitlink、コンテナ内では無効な参照になる)が含まれても実害はない

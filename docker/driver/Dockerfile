@@ -21,7 +21,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libyaml-cpp-dev \
     python3-colcon-common-extensions \
     iproute2 \
+    tree \
+    htop \
+    tmux \
+    curl \
+    wget \
+    unzip \
+    jq \
+    ripgrep \
+    fd-find \
+    bat \
     && rm -rf /var/lib/apt/lists/*
+
+# Ubuntu の fd-find/bat パッケージは実行ファイル名が fdfind/batcat になるため、
+# 通常名(fd/bat)でも呼べるようにリンクしておく
+RUN ln -s $(command -v fdfind) /usr/local/bin/fd \
+    && ln -s $(command -v batcat) /usr/local/bin/bat
 
 # unitree_ros2本体(submodule)のうち、実際にビルドが必要な部分だけ取り込む:
 #   cyclonedds_ws/src/unitree : unitree_go/unitree_api/unitree_hg メッセージ定義
