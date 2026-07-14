@@ -10,16 +10,19 @@
       target_frame: "base_link"
       transform_tolerance: 0.05
 
-      # 顎LiDARの搭載高さ(base_link相対 z=-0.06)を基準に、
-      # ±5cmの高さ帯だけを2Dスキャンとして切り出す
-      min_height: -0.05
+      # 顎LiDARは20°下向き+垂直FOV±15°で全ビームが水平から5〜35°下向きにしかならず、
+      # base_link相対±5cmの狭い帯だと遠方の壁がほぼ拾えず自分の脚・床の近距離ノイズ
+      # ばかりになっていた(Issue #26)。浅いチャンネルで数m先の壁を拾えるよう
+      # min_heightを大きく下げて帯を広げ、range_minで至近距離ノイズを弾く
+      min_height: -0.25
       max_height: 0.05
 
       angle_min: -3.14159265
       angle_max: 3.14159265
       angle_increment: 0.0087
       scan_time: 0.1
-      range_min: 0.1
+      # 脚(0.13〜0.3m)の近距離ノイズを除外(Issue #26)
+      range_min: 0.4
       range_max: 30.0
       use_inf: true
       concurrency_level: 1
