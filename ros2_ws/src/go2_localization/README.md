@@ -2,10 +2,10 @@
 
 自己位置推定 練習(自M1: EKF融合・自M2: AMCL稼働)用のbringupパッケージ。
 
-このパッケージは自作ノードを持たない。中身は全部「既存パッケージ(`robot_localization`・
-`pointcloud_to_laserscan`・`nav2_amcl`・`nav2_map_server`)の設定ファイル(yaml)+
-起動ファイル(launch.py)」だけで構成されている。Pythonコードとしては`launch/*.launch.py`
-だけが実体のあるコードで、あとは全部パラメータの調整対象。
+このパッケージの本体は「既存パッケージ(`robot_localization`・`pointcloud_to_laserscan`・
+`nav2_amcl`・`nav2_map_server`)の設定ファイル(yaml)+起動ファイル(launch.py)」だけで
+構成されている。唯一の自作ノード`height_slice_viz`はAMCLの推定パイプラインには関与しない、
+デバッグ可視化専用のもの(詳細は5節)。
 
 ## なぜこの設計になっているか(重要な前提)
 
@@ -341,7 +341,47 @@ ekf_launch = IncludeLaunchDescription(
 ```
 - 他のlaunchファイルを「部品」としてそのまま読み込んで合体させる仕組み。
   `ros2 launch go2_localization localization.launch.py`の1コマンドで
-  EKF・pointcloud_to_laserscan・AMCLの3つが同時に起動する
+  EKF・pointcloud_to_laserscan・AMCL・`height_slice_viz`(5節)の4つが同時に起動する
+
+---
+
+## 5. `go2_localization/height_slice_viz.py` + `launch/height_slice_viz.launch.py`(デバッグ可視化)
+
+### なぜ必要か(Issue #26関連)
+
+`pointcloud_to_laserscan`の出力(`LaserScan`)をRViz2でそのまま見ようとしたところ、
+この環境では**upstream本家の`/robot1/scan`(intensitiesも正常に入っている)を含めて
+`LaserScan`表示が一切描画されない**現象が起きた(Position/Color Transformerが
+両方とも空欄のまま)。データ自体は`ros2 topic echo`で正常と確認済みで、`PointCloud2`
+表示は同じ環境で問題なく描画できていたため、原因はデータではなくこの環境の
+`LaserScan`表示プラグイン側にあると判断し、深追いを避けて「`PointCloud2`のまま
+見えるようにする」回避策に切り替えた。
+
+### やっていること
+
+`pointcloud_to_laserscan`と全く同じ「`target_frame`(=`base_link`)に変換してから
+高さ(`min_height`〜`max_height`)で輪切りにする」処理を行うが、結果を`LaserScan`に
+変換せず**`PointCloud2`のまま**`/go2_localization/chin_lidar_scan_points`に出力する。
+AMCL本体が使う`pointcloud_to_laserscan`のパイプラインには一切手を加えず、
+可視化専用の経路を並行して追加しただけの位置づけ。
+
+- `tf2_ros.Buffer`で`target_frame`への変換(平行移動+回転)を取得
+- 生の点群は`intensity`・`ring`など`x,y,z`以外のフィールドも持っており、
+  `tf2_sensor_msgs.do_transform_cloud`にそのまま渡すと出力側の型組み立てで
+  `AssertionError`になった(フィールド構成が混在するとうまく扱えない模様)。
+  そのため`x,y,z`だけを`sensor_msgs_py.point_cloud2.read_points`で抜き出し、
+  クォータニオン→回転行列に変換した上でNumPyで手動変換している
+- 高さフィルタ後の点群は`create_cloud_xyz32`で組み立て直す
+- `min_height`/`max_height`は`height_slice_viz.launch.py`が`pointcloud_to_laserscan.yaml`
+  を直接読んで使う(手動同期はしていない)。`pointcloud_to_laserscan.yaml`を編集して
+  どちらのlaunchも起動し直せば、両方に同じ値が反映される
+
+### 動かし方
+
+`localization.launch.py`に組み込み済みなので、単体では起動しない(単体起動したい場合のみ
+`ros2 launch go2_localization height_slice_viz.launch.py`)。
+
+RVizで`/go2_localization/chin_lidar_scan_points`を`PointCloud2`として追加すれば見える。
 
 ## 動かし方
 

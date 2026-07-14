@@ -27,6 +27,8 @@ setup(
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
-        'console_scripts': [],
+        'console_scripts': [
+            'height_slice_viz = go2_localization.height_slice_viz:main',
+        ],
     },
 )

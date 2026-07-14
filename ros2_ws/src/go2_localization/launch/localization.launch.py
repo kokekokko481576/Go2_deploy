@@ -20,5 +20,9 @@ def generate_launch_description():
     amcl_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(launch_dir, 'amcl.launch.py'))
     )
+    height_slice_viz_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(launch_dir, 'height_slice_viz.launch.py'))
+    )
 
-    return LaunchDescription([ekf_launch, p2l_launch, amcl_launch])
+    return LaunchDescription([ekf_launch, p2l_launch, amcl_launch, height_slice_viz_launch])

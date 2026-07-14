@@ -4,12 +4,13 @@
   <name>go2_localization</name>
   <version>0.1.0</version>
   <description>
-    自己位置推定 練習(自M1・自M2)用のbringupパッケージ。自作ノードは持たず、
-    robot_localization(EKF)・pointcloud_to_laserscan・nav2_amcl/nav2_map_serverの
-    設定ファイル+launchファイルのみで構成する。simコンテナ(go2_ros2_sim_py)が
-    既に独自のNav2フルスタック(EKF+AMCL)を起動しているため、tf衝突を避けるべく
-    publish_tf/tf_broadcastをfalseにし、推定結果は/go2_localization/以下の
-    トピックとしてのみ出力する。
+    自己位置推定 練習(自M1・自M2)用のbringupパッケージ。基本はrobot_localization(EKF)・
+    pointcloud_to_laserscan・nav2_amcl/nav2_map_serverの設定ファイル+launchファイルで
+    構成する。simコンテナ(go2_ros2_sim_py)が既に独自のNav2フルスタック(EKF+AMCL)を
+    起動しているため、tf衝突を避けるべくpublish_tf/tf_broadcastをfalseにし、推定結果は
+    /go2_localization/以下のトピックとしてのみ出力する。唯一の自作ノード
+    height_slice_vizは、RViz2のLaserScan表示が描画されない環境向けに、高さスライス後の
+    点群をPointCloud2のまま可視化するデバッグ専用ノード。
   </description>
   <maintainer email="koga_koichiro@naoe.eng.osaka-u.ac.jp">koga_koichiro</maintainer>
   <license>Apache-2.0</license>
@@ -19,6 +20,10 @@
   <depend>nav2_amcl</depend>
   <depend>nav2_map_server</depend>
   <depend>nav2_lifecycle_manager</depend>
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>sensor_msgs_py</depend>
+  <depend>tf2_ros</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
