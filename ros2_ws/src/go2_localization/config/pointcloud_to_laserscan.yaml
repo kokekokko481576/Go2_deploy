@@ -14,7 +14,7 @@
       # base_link相対±5cmの狭い帯だと遠方の壁がほぼ拾えず自分の脚・床の近距離ノイズ
       # ばかりになっていた(Issue #26)。浅いチャンネルで数m先の壁を拾えるよう
       # min_heightを大きく下げて帯を広げ、range_minで至近距離ノイズを弾く
-      min_height: -0.25
+      min_height: -0.0
       max_height: 0.05
 
       angle_min: -3.14159265
@@ -26,3 +26,18 @@
       range_max: 30.0
       use_inf: true
       concurrency_level: 1
+
+  # height_slice_vizのみで使う(AMCL本体が使うpointcloud_to_laserscanノードには無関係)。
+  # 単純な高さレンジではなく、レイごとの理論上の床到達距離との比較で床を除去する
+  # 方式に変更した(Issue #26)。詳細はhigh_slice_viz.pyのdocstring参照
+  height_slice_viz:
+    ros__parameters:
+      use_sim_time: true
+      target_frame: "base_link"
+      # 床の高さ(target_frame相対)。cafe_worldの平地で静止スキャンした実測値
+      # (前方0.5〜2.0mで一貫してz=-0.26〜-0.28だった)から-0.27とした
+      floor_z: -0.27
+      # 理論上の床到達距離より、これ以上手前で反射していれば障害物とみなすマージン
+      floor_margin: 0.1
+      # 参考程度の粗い上限(天井反射等の除外用)
+      max_height: 0.3

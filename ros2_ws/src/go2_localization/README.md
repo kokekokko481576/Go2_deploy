@@ -359,22 +359,36 @@ ekf_launch = IncludeLaunchDescription(
 
 ### やっていること
 
-`pointcloud_to_laserscan`と全く同じ「`target_frame`(=`base_link`)に変換してから
-高さ(`min_height`〜`max_height`)で輪切りにする」処理を行うが、結果を`LaserScan`に
-変換せず**`PointCloud2`のまま**`/go2_localization/chin_lidar_scan_points`に出力する。
-AMCL本体が使う`pointcloud_to_laserscan`のパイプラインには一切手を加えず、
-可視化専用の経路を並行して追加しただけの位置づけ。
+当初は`pointcloud_to_laserscan`と同じ「`target_frame`(=`base_link`)に変換してから
+高さ(`min_height`〜`max_height`)で輪切りにする」処理だったが、これだと**床と壁を
+原理的に区別できない**問題があった: 遠方の壁を拾うには低いmin_heightが必要だが、
+その高さ帯には様々な距離で床(距離が変わってもほぼ同じ高さにある水平面)も
+入り込んでしまう。高さだけでは「その高さに"たまたま来た床"」と「その高さに
+"本当にある壁"」を区別できない。
 
-- `tf2_ros.Buffer`で`target_frame`への変換(平行移動+回転)を取得
+そこで**レイごとの理論上の床到達距離との比較**に変更した:
+センサの搭載位置・角度から、各レイ(センサ原点→その点への直線)が仮に何もない
+床(`target_frame`相対で`floor_z`の高さ)まで届いたとしたら何m先になるかを逆算し、
+実際の反射距離がそれより`floor_margin`以上手前なら「床の手前に何かある」=障害物、
+理論距離付近〜以遠なら床、と判定して床側を除去する。結果は`LaserScan`に変換せず
+**`PointCloud2`のまま**`/go2_localization/chin_lidar_scan_points`に出力する。
+AMCL本体が使う`pointcloud_to_laserscan`のパイプラインには一切手を加えず、
+可視化専用の経路を並行して追加しただけの位置づけ(将来的に効果が確認できたら
+AMCL側の`pointcloud_to_laserscan`をこの床除去ロジックを持つ自作ノードに
+置き換えることも検討)。
+
+- `tf2_ros.Buffer`で`target_frame`への変換(平行移動+回転)を取得。この平行移動成分は
+  そのまま「`target_frame`から見たセンサ原点の位置」になる
 - 生の点群は`intensity`・`ring`など`x,y,z`以外のフィールドも持っており、
   `tf2_sensor_msgs.do_transform_cloud`にそのまま渡すと出力側の型組み立てで
   `AssertionError`になった(フィールド構成が混在するとうまく扱えない模様)。
   そのため`x,y,z`だけを`sensor_msgs_py.point_cloud2.read_points`で抜き出し、
   クォータニオン→回転行列に変換した上でNumPyで手動変換している
-- 高さフィルタ後の点群は`create_cloud_xyz32`で組み立て直す
-- `min_height`/`max_height`は`height_slice_viz.launch.py`が`pointcloud_to_laserscan.yaml`
-  を直接読んで使う(手動同期はしていない)。`pointcloud_to_laserscan.yaml`を編集して
-  どちらのlaunchも起動し直せば、両方に同じ値が反映される
+- `floor_z`(床の高さ)・`floor_margin`(床とみなす手前側マージン)・`max_height`
+  (天井反射等を除く粗い上限)は`config/pointcloud_to_laserscan.yaml`の
+  `height_slice_viz:`ブロックで調整できる(`pointcloud_to_laserscan`ノード本体とは
+  別ブロック。同じyamlファイル内に同居させているだけ)
+- 床除去後の点群は`create_cloud_xyz32`で組み立て直す
 
 ### 動かし方
 
