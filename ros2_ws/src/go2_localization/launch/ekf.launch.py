@@ -19,7 +19,9 @@ def generate_launch_description():
             ('raw_odom_input', '/robot1/odometry/filtered'),
             ('imu_plugin/out', '/robot1/imu_plugin/out'),
             ('odometry/filtered', '/go2_localization/odometry/filtered'),
-            ('/tf', '/robot1/tf'),
+            # 配信するodom->base_linkは専用トピックへ(upstreamの/robot1/tfとは分離)。
+            # 静止TF(センサ位置等)はupstream(robot_state_publisher)から読み続ける
+            ('/tf', '/go2_localization/tf'),
             ('/tf_static', '/robot1/tf_static'),
         ],
     )

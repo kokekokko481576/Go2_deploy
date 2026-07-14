@@ -2,9 +2,11 @@ amcl:
   ros__parameters:
     use_sim_time: true
 
-    # upstream(sim)側が同じmap/odom/base_linkフレームで既にAMCLを動かしているため、
-    # tf衝突を避けてtf配信はせず、amcl_poseトピックの出力のみ行う
-    tf_broadcast: false
+    # go2_path_following(追M2)のTF参照元として自前のTFを配信する。upstream本家と
+    # 同じmap/odom/base_linkフレーム名だが、出力先はlaunchファイルで
+    # /go2_localization/tfにリマップしており、upstreamの/robot1/tfとは別トピックなので
+    # 衝突しない(tf_staticはupstreamの静止TFを読み続けるだけなので変更不要)
+    tf_broadcast: true
 
     base_frame_id: "base_link"
     odom_frame_id: "odom"

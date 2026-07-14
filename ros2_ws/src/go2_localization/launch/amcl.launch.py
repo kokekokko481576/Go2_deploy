@@ -31,7 +31,9 @@ def generate_launch_description():
             ('map', '/go2_localization/map'),
             ('amcl_pose', '/go2_localization/amcl_pose'),
             ('particlecloud', '/go2_localization/particlecloud'),
-            ('/tf', '/robot1/tf'),
+            # odom->base_link入力・map->odom出力とも自前のEKFと同じ専用トピックを使う
+            # (upstreamの/robot1/tfとは分離)。静止TFはupstreamから読み続ける
+            ('/tf', '/go2_localization/tf'),
             ('/tf_static', '/robot1/tf_static'),
         ],
     )

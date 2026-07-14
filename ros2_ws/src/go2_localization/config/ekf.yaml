@@ -7,7 +7,10 @@
       sensor_timeout: 0.2
       two_d_mode: true
 
-      publish_tf: false
+      # go2_path_following(追M2)のTF参照元として自前のTFを配信する。
+      # upstream本家と衝突しないよう、出力先はlaunchファイルで/go2_localization/tfに
+      # リマップしている(tf_staticはupstreamの静止TFを読み続けるだけなので変更不要)
+      publish_tf: true
       map_frame: map
       odom_frame: odom
       base_link_frame: base_link
