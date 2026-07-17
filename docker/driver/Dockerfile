@@ -4,7 +4,10 @@
 # 本体(external/unitree_ros2)は変更せず追従可能に保つ。
 # 公式 .devcontainer/Dockerfile-humble はzsh/oh-my-zsh/clang-18等の対話開発向けツールを
 # 大量に含み、かつコンテナ内でビルドを完結させない(sleepループで待機し手動ビルドが前提)ため、
-# ここでは要件定義どおり「公式.devcontainerを参考に」した軽量な自作Dockerfileとする。
+# ここでは要件定義どおり「公式.devcontainerを参考に」した軽量な自作Dockerfileとする
+# (ビルドをコンテナ内で完結させる点は変えていない)。
+# なお対話シェルの使い勝手向上のためzshは追加で導入している(下記・docker/common/参照)が、
+# oh-my-zsh/clang-18等の重量級ツール一式は引き続き入れていない。
 #
 # CycloneDDSバージョン: Go2ファーム側は0.10.2固定(unitree_ros2 README記載)。
 # README曰く「Humbleの場合はCycloneDDSのソースビルドは不要、apt版のros-humble-rmw-cyclonedds-cppで良い」
@@ -31,12 +34,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ripgrep \
     fd-find \
     bat \
+    zsh \
+    zsh-autosuggestions \
+    zsh-syntax-highlighting \
     && rm -rf /var/lib/apt/lists/*
 
 # Ubuntu の fd-find/bat パッケージは実行ファイル名が fdfind/batcat になるため、
 # 通常名(fd/bat)でも呼べるようにリンクしておく
 RUN ln -s $(command -v fdfind) /usr/local/bin/fd \
     && ln -s $(command -v batcat) /usr/local/bin/bat
+
+# プロンプト(starship)。単一の静的バイナリで依存が無く、ビルドを重くしない
+RUN curl -sS https://starship.rs/install.sh | sh -s -- --yes
 
 # unitree_ros2本体(submodule)のうち、実際にビルドが必要な部分だけ取り込む:
 #   cyclonedds_ws/src/unitree : unitree_go/unitree_api/unitree_hg メッセージ定義
@@ -64,8 +73,13 @@ COPY docker/driver/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # docker compose exec 等の対話シェル(entrypointを経由しない)でもROS2・CycloneDDS設定が
-# 効くよう、.bashrcからも同じ設定をsourceする(docker/Dockerfileの既存方針と同様)。
+# 効くよう、.bashrc/.zshrc両方からも同じ設定をsourceする(docker/Dockerfileの既存方針と同様)。
 RUN echo 'source /setup_dds.sh' >> ~/.bashrc
 
+# --- 対話シェルはzshを既定に(docker/common/参照。予測入力・補完メニュー・starshipプロンプト) ---
+COPY docker/common/zshrc /root/.zshrc
+COPY docker/common/starship.toml /root/.config/starship.toml
+RUN echo 'source /setup_dds.sh' >> ~/.zshrc
+
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["bash"]
+CMD ["zsh"]

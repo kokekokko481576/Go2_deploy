@@ -20,12 +20,15 @@ docker compose up -d
 docker logs -f go2-sim     # 起動ログ確認(Gazebo GUIウィンドウも表示される)
 
 # 別ターミナルでキーボード操作する場合(下記 or ./teleop.sh のどちらでも可)
-# 注意: docker execは/ros_entrypoint.shを経由しないためROS環境が未sourceの状態になる。
-# bashに入るだけでは`ros2`コマンドが見つからないので、都度sourceが必要。
-docker exec -it go2-sim bash
-source /opt/ros/jazzy/setup.bash
-source "$WORKSPACE_DIR/install/setup.bash"
+# zshなら~/.zshrc起動時にROS2/ワークスペースを自動sourceするので手動sourceは不要
+docker exec -it go2-sim zsh
 ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/robot1/cmd_vel
+
+# bashで入る場合は/ros_entrypoint.shを経由しないためROS環境が未sourceの状態になり、
+# 都度sourceが必要な点に注意
+# docker exec -it go2-sim bash
+# source /opt/ros/jazzy/setup.bash
+# source "$WORKSPACE_DIR/install/setup.bash"
 
 # または簡単に:
 ./teleop.sh

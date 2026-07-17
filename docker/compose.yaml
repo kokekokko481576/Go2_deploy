@@ -22,7 +22,7 @@ services:
       - ROS_DOMAIN_ID=0
     stdin_open: true
     tty: true
-    command: bash
+    command: zsh
     # 実機Go2(有線LAN・DDS)と通信する場合や、Ubuntuネイティブでの利用はホストネットワークを使う(推奨)。
     # [Mac] Docker Desktop 4.34以降 + 設定で "Enable host networking" を有効化が必要
     network_mode: host

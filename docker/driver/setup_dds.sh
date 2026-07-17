@@ -1,4 +1,4 @@
-# CycloneDDS/RMW設定(entrypoint.sh・対話シェルの.bashrc両方からsourceされる共通処理)。
+# CycloneDDS/RMW設定(entrypoint.sh・対話シェルの.bashrc/.zshrc全てからsourceされる共通処理)。
 # NIC名は要件定義R2どおりイメージに焼き込まず環境変数(GO2_NIC)から注入する。
 # 実機なし(このPCでの動作確認)の場合は既定の "lo" のままでよい。
 # 実機Go2に有線LANで接続する場合は GO2_NIC=enp3s0 のように環境変数で指定する。
@@ -24,5 +24,12 @@ EOF
 export CYCLONEDDS_URI="file:///tmp/cyclonedds.xml"
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
-source /opt/ros/humble/setup.bash
-source /root/ws/install/setup.bash
+# zshrcからもsourceされるため、ROS2のセットアップスクリプトはシェルに応じて.bash/.zshを切り替える
+# (setup.bashはBASH_SOURCE等bash固有の構文を含み、zshからsourceすると失敗するため)
+if [ -n "$ZSH_VERSION" ]; then
+    source /opt/ros/humble/setup.zsh
+    source /root/ws/install/setup.zsh
+else
+    source /opt/ros/humble/setup.bash
+    source /root/ws/install/setup.bash
+fi

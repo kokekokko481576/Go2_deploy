@@ -49,6 +49,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ripgrep \
     fd-find \
     bat \
+    zsh \
+    zsh-autosuggestions \
+    zsh-syntax-highlighting \
     python3-pip \
     python3-colcon-common-extensions \
     python3-rosdep \
@@ -74,6 +77,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN ln -s $(command -v fdfind) /usr/local/bin/fd \
     && ln -s $(command -v batcat) /usr/local/bin/bat
 
+# --- プロンプト(starship) ---
+# 単一の静的バイナリで依存が無く、ビルドを重くしないため公式スクリプトで導入
+RUN curl -sS https://starship.rs/install.sh | sh -s -- --yes
+
 # --- 非rootユーザ ---
 ARG USERNAME=ros
 ARG UID=1000
@@ -88,8 +95,16 @@ WORKDIR /home/${USERNAME}
 # rosdep 初期化（ユーザ側 update のみ。init はベースイメージ済み）
 RUN rosdep update
 
-# シェル起動時に ROS2 とワークスペースを自動 source
+# シェル起動時に ROS2 とワークスペースを自動 source(bash・zsh両対応)
 RUN echo 'source /opt/ros/humble/setup.bash' >> ~/.bashrc \
     && echo '[ -f ~/ros2_ws/install/setup.bash ] && source ~/ros2_ws/install/setup.bash' >> ~/.bashrc
 
-CMD ["bash"]
+# --- 対話シェルはzshを既定に(docker/common/README参照。予測入力・補完メニュー・starshipプロンプト) ---
+COPY --chown=${USERNAME}:${USERNAME} common/zshrc /home/${USERNAME}/.zshrc
+COPY --chown=${USERNAME}:${USERNAME} common/starship.toml /home/${USERNAME}/.config/starship.toml
+RUN echo '[ -f ~/ros2_ws/install/setup.zsh ] && source ~/ros2_ws/install/setup.zsh' >> ~/.zshrc
+USER root
+RUN chsh -s /usr/bin/zsh ${USERNAME}
+USER ${USERNAME}
+
+CMD ["zsh"]

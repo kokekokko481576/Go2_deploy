@@ -1,0 +1,27 @@
+# dev/sim/driver 共通のstarship設定。Nerd Font前提のアイコンは使わず、
+# 素のUnicode(絵文字含む)だけで構成し、どのターミナルでも文字化けしないようにしてある。
+add_newline = false
+
+format = """$directory$git_branch$git_status$custom.ros_distro$character"""
+
+[character]
+success_symbol = "[❯](bold green)"
+error_symbol = "[❯](bold red)"
+
+[directory]
+truncation_length = 3
+style = "bold cyan"
+
+[git_branch]
+symbol = "on "
+style = "bold purple"
+
+[git_status]
+style = "bold yellow"
+
+[custom.ros_distro]
+command = "echo $ROS_DISTRO"
+when = true
+symbol = "🤖 "
+style = "bold blue"
+format = "[$symbol$output]($style) "

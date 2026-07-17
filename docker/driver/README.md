@@ -16,7 +16,7 @@
 cd docker/driver
 docker compose build   # 初回のみ
 docker compose up -d
-docker compose exec driver bash   # 対話シェル。RMW/CycloneDDS設定は.bashrc経由で自動適用
+docker compose exec driver zsh   # 対話シェル(既定はzsh)。RMW/CycloneDDS設定は.zshrc経由で自動適用
 
 # 実機Go2に有線LAN接続する場合(ホストで一度)
 GO2_NIC=enp3s0 docker compose up -d
@@ -30,10 +30,12 @@ GO2_NIC=enp3s0 docker compose up -d
   本体は変更せず、Dockerfile側でビルド後に `lib/unitree_ros2_example/` へシンボリックリンクを
   張る後処理を追加して対処(`docker/driver/Dockerfile` 参照)
 - **entrypoint.sh とCycloneDDS/RMW設定を共通化**: `/setup_dds.sh` に集約し、コンテナのメイン
-  プロセス(entrypoint経由)と `docker compose exec` の対話シェル(`.bashrc` 経由)の両方から
-  同じ設定が当たるようにしている。`docker exec` で非対話(`bash -c`、`-i`無し)に入ると
-  Ubuntu既定の `.bashrc` の先頭ガード(`[ -z "$PS1" ] && return` 相当)により`.bashrc`の残りが
-  読まれず設定が当たらない点に注意(対話シェル・`bash -ic` なら問題ない)
+  プロセス(entrypoint経由)と `docker compose exec` の対話シェル(`.bashrc`/`.zshrc` 経由)の
+  いずれからも同じ設定が当たるようにしている。`setup_dds.sh` 内のROS2 setup読み込みは
+  `$ZSH_VERSION` の有無でbash/zsh版を切り替えている(setup.bashは`BASH_SOURCE`等bash固有の
+  構文を含みzshからsourceすると失敗するため)。`docker exec` で非対話(`bash -c`、`-i`無し)に
+  入ると先頭ガード(`[ -z "$PS1" ] && return` 相当)により`.bashrc`/`.zshrc`の残りが読まれず
+  設定が当たらない点に注意(対話シェルなら問題ない)
 - **ループバック(`GO2_NIC`未指定=既定`lo`)でのDDS発見**: `lo` はmulticastフラグが
   立っておらず(本機で確認済み)、CycloneDDS既定のマルチキャストSPDP発見が機能しない。
   `setup_dds.sh` 内で `lo` の場合のみ `AllowMulticast=false` + `Peers`(ユニキャスト)+

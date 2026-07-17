@@ -24,7 +24,7 @@ docker compose build
 
 # 起動して中に入る
 docker compose up -d
-docker compose exec ros2 bash
+docker compose exec ros2 zsh
 
 # 動作確認（コンテナ内）
 ros2 run demo_nodes_cpp talker    # 別タブで listener
@@ -34,11 +34,23 @@ ros2 run demo_nodes_cpp talker    # 別タブで listener
 コンテナを破棄してもコードはホスト側に残る。
 
 ```bash
-# コンテナ内でのビルド
+# コンテナ内でのビルド(cb は後述のエイリアス)
 cd ~/ros2_ws
-colcon build --symlink-install
-source install/setup.bash
+cb
+source install/setup.zsh
 ```
+
+## 対話シェル(zsh)
+
+対話シェルの既定は `zsh`。予測入力・補完メニュー・シンタックスハイライト・starshipプロンプトを
+`docker/common/zshrc`(dev/sim/driver共通、ホストの `~/.zshrc` を参考に軽量に再現)で設定済み。
+
+- `ll`/`la`/`l`: エイリアス(ホストの `aliases.zsh` と同じ)
+- `cb` / `cbp <pkg>`: `colcon build --symlink-install` / `--packages-select <pkg>`
+- ROS2は`ROS_DISTRO`・ワークスペースとも起動時に自動source済み(手動sourceは通常不要)
+- 従来の`bash`も引き続き使える(`docker compose exec ros2 bash`)。`.bashrc`のROS2 sourceはそのまま残置
+
+詳細・他コンテナ(sim/driver)との共通化については `docker/common/` 参照。
 
 ## GUI（RViz2 / Gazebo）を使う場合
 

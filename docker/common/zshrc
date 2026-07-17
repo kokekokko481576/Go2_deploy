@@ -1,0 +1,40 @@
+# dev/sim/driver 3コンテナ共通のzsh設定。各Dockerfileから ~/.zshrc としてCOPYされる。
+# ホストの ~/.zshrc(dotfiles管理・prezto+p10k)と同じ体験は持ち込めないため、
+# その代わりに軽量なパーツ(zsh-autosuggestions/zsh-syntax-highlighting/starship、
+# いずれもapt/静的バイナリで完結・ビルドを重くしない)で近い使用感を再現する。
+# ワークスペースのsourceなど各コンテナ固有の行は、この後ろに各Dockerfileがさらに追記する。
+
+[[ $- != *i* ]] && return
+
+# --- 履歴 ---
+HISTFILE=~/.zsh_history
+HISTSIZE=10000
+SAVEHIST=10000
+setopt HIST_IGNORE_DUPS SHARE_HISTORY
+
+# --- 補完(prezto相当: メニュー選択+大文字小文字を区別しないマッチ+色付き) ---
+autoload -Uz compinit && compinit -C
+zstyle ':completion:*' menu select
+zstyle ':completion:*' matcher-list 'm:{a-z}={A-Za-z}'
+zstyle ':completion:*' list-colors "${(s.:.)LS_COLORS}"
+
+# --- 予測入力・シンタックスハイライト(apt版、フレームワークではなく単体パッケージで軽量に) ---
+[ -f /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh ] && \
+    source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+[ -f /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ] && \
+    source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+
+# --- プロンプト(starship、Nerd Font無しでも文字化けしないASCII安全構成) ---
+command -v starship >/dev/null 2>&1 && eval "$(starship init zsh)"
+
+# --- エイリアス(~/.zshrc(ホスト)のaliases.zshを踏襲) ---
+alias ll='ls -alF'
+alias la='ls -A'
+alias l='ls -CF'
+
+# --- colcon ---
+alias cb='colcon build --symlink-install'
+alias cbp='colcon build --symlink-install --packages-select'
+
+# --- ROS2(ROS_DISTROはベースイメージ側で既に設定済み) ---
+[ -f "/opt/ros/${ROS_DISTRO}/setup.zsh" ] && source "/opt/ros/${ROS_DISTRO}/setup.zsh"

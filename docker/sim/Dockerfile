@@ -71,12 +71,18 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     ripgrep \
     fd-find \
     bat \
+    zsh \
+    zsh-autosuggestions \
+    zsh-syntax-highlighting \
     && rm -rf /var/lib/apt/lists/*
 
 # Ubuntu の fd-find/bat パッケージは実行ファイル名が fdfind/batcat になるため、
 # 通常名(fd/bat)でも呼べるようにリンクしておく
 RUN ln -s $(command -v fdfind) /usr/local/bin/fd \
     && ln -s $(command -v batcat) /usr/local/bin/bat
+
+# プロンプト(starship)。単一の静的バイナリで依存が無く、ビルドを重くしない
+RUN curl -sS https://starship.rs/install.sh | sh -s -- --yes
 
 # go2_ros2_sim_py 本体(submodule)をワークスペースへ。colcon-cacheを使わないため
 # submodule内の .git (gitlink、コンテナ内では無効な参照になる)が含まれても実害はない
@@ -93,4 +99,13 @@ ENV WORKSPACE_DIR=/root/ws
 RUN sed -i '/exec "\$@"/i umask 002' /ros_entrypoint.sh \
     && sed -i '/exec "\$@"/i source "$WORKSPACE_DIR/install/setup.bash"' /ros_entrypoint.sh
 
-CMD ["bash"]
+# --- 対話シェルはzshを既定に(docker/common/参照。予測入力・補完メニュー・starshipプロンプト) ---
+# `docker exec`は上記の/ros_entrypoint.shを経由しないため、ROS2/ワークスペースのsourceは
+# ~/.zshrc側でも行う(README「docker execで入るとROS未sourceの問題」の解消も兼ねる)
+COPY docker/common/zshrc /root/.zshrc
+COPY docker/common/starship.toml /root/.config/starship.toml
+RUN echo '[ -f "$WORKSPACE_DIR/install/setup.zsh" ] && source "$WORKSPACE_DIR/install/setup.zsh"' >> /root/.zshrc
+
+# メインプロセスはdocker/sim/compose.yamlのcommand(Gazebo launch、bash -c)が常に上書きするが、
+# `docker run`等でcompose無しに起動された場合の既定はdev/driverと合わせてzshにしておく
+CMD ["zsh"]

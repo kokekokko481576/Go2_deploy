@@ -15,4 +15,4 @@ services:
       # 未接続でのビルド・コマンド確認のみなら既定の "lo" のままでよい。
       - GO2_NIC=${GO2_NIC:-lo}
       - ROS_DOMAIN_ID=0
-    command: bash
+    command: zsh
