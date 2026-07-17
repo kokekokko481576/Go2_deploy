@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>go2_path_planning</name>
+  <version>0.1.0</version>
+  <description>
+    経路生成(生M2: コストマップ+グリッド探索)用のbringupパッケージ。nav2_planner
+    (NavFn=ダイクストラ)の設定ファイル+launchファイルと、goal_poseを
+    ComputePathToPoseアクションに変換してplanトピックへ流すだけの小さな橋渡しノード
+    (plan_requester)で構成する。straight_line_planner(生M1)とトピックI/F互換で、
+    下流(plan_follower以降)を変えずに差し替えられる。
+  </description>
+  <maintainer email="koga_koichiro@naoe.eng.osaka-u.ac.jp">koga_koichiro</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>nav2_planner</depend>
+  <depend>nav2_navfn_planner</depend>
+  <depend>nav2_costmap_2d</depend>
+  <depend>nav2_lifecycle_manager</depend>
+  <depend>nav2_msgs</depend>
+  <depend>rclpy</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
