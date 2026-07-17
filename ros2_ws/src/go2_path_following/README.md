@@ -54,9 +54,14 @@ ros2 run straight_line_planner straight_line_planner_node --ros-args -p use_sim_
 ros2 run cmd_vel_safety cmd_vel_safety_node --ros-args -r cmd_vel:=/robot1/cmd_vel
 ```
 
-ゴールをpublishして実際に動くか確認:
+ゴールをpublishして実際に動くか確認(YAML手打ちはスペース位置を間違えやすいので
+`scripts/send_goal.sh`を推奨。`x` `y` `yaw(度)`を引数で渡せる):
 
 ```bash
+~/ros2_ws/src/go2_path_following/scripts/send_goal.sh 3.0 0.0     # 3m前方へ
+~/ros2_ws/src/go2_path_following/scripts/send_goal.sh 2.0 1.5 90  # 斜め先で左向きに正対
+
+# 中身は以下と等価:
 ros2 topic pub /goal_pose geometry_msgs/msg/PoseStamped \
   "{header: {frame_id: map}, pose: {position: {x: 3.0, y: 0.0}, orientation: {w: 1.0}}}" --once
 ```
