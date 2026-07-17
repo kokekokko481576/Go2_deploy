@@ -13,8 +13,11 @@ Y="${2:-0.0}"
 YAW_DEG="${3:-0.0}"
 
 # yaw(度)→クォータニオン(z,w)。roll/pitchは0固定
-read -r QZ QW < <(awk -v d="$YAW_DEG" \
-  'BEGIN { r = d * 3.14159265358979 / 180 / 2; printf "%.6f %.6f", sin(r), cos(r) }')
+# (awkはdevコンテナに入っていないためpython3を使う。ROS2環境なら必ず存在する)
+read -r QZ QW < <(python3 -c "import math, sys
+r = float(sys.argv[1]) * math.pi / 180.0 / 2.0
+print(f'{math.sin(r):.6f} {math.cos(r):.6f}')" "$YAW_DEG") || {
+  echo "error: yaw->quaternion変換に失敗しました" >&2; exit 1; }
 
 echo "publish /goal_pose: x=${X} y=${Y} yaw=${YAW_DEG}deg (qz=${QZ} qw=${QW})"
 exec ros2 topic pub /goal_pose geometry_msgs/msg/PoseStamped \
