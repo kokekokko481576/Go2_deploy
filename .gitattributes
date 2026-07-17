@@ -1,0 +1,7 @@
+# Windows上でcloneした際のCRLF混入対策 (#32)
+# コンテナ内(Linux)で実行・解釈されるファイルは改行コードをLF固定にする。
+# 通常運用(WSL2の ~/ 以下にclone)では発生しないが、誤って /mnt/c/... 側に
+# cloneした場合の保険として維持する。
+*.sh text eol=lf
+zshrc text eol=lf
+Dockerfile text eol=lf

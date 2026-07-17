@@ -15,6 +15,12 @@ ROS2 Humble + Nav2 + robot_localization + slam_toolbox + Gazebo など、
 | Isaac Sim / Isaac Lab | × NVIDIA GPU 必須。本イメージ・本開発機（iGPUのみ）では不可（GPU 搭載 Linux 機で別途） |
 | 実機 Go2 との DDS 通信 | ○ Ubuntu（`network_mode: host` 有効化済み） / △ Mac（ホストネットワーク設定に制約） |
 
+> **Windows**: WSL2ネイティブ運用（WSL2内にDocker Engineを入れ、WSL2のLinuxシェルから
+> `docker compose` を実行）を前提に対応を進めている（検証中、issue #28）。リポジトリは
+> WSL2側のLinuxファイルシステム（`~/` 以下）にcloneすること（`/mnt/c/...` はCRLF混入・
+> bind mount低速化のため不可）。GUI（WSLg）・DDS疎通の検証が済むまで、上表と本README
+> の手順は Ubuntu / Mac のみを記載している。
+
 ## 使い方
 
 ```bash

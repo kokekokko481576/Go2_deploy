@@ -34,6 +34,11 @@ flowchart LR
 git clone --recurse-submodules <このリポジトリのURL>
 ```
 
+> **Windowsの場合**: WSL2（Ubuntu）を前提とする。リポジトリは必ずWSL2側のLinux
+> ファイルシステム（`~/` 以下）にcloneし、WSL2のシェルから作業すること。
+> `/mnt/c/...`（Windows側パス）へのcloneは改行コード（CRLF）混入やbind mountの
+> 速度低下の原因になるため避ける。詳細な対応状況は issue #28 を参照。
+
 ### 開発環境（dev: ROS2 Humble + Nav2）
 
 ```bash
