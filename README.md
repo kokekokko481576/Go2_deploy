@@ -22,7 +22,7 @@ flowchart LR
 
 | パス | 内容 |
 |------|------|
-| `docs/` | 計画ドキュメント（自己位置推定・経路生成・経路追従の3計画、統合作業計画、開発ガイド） |
+| `docs/` | 計画ドキュメント一式（索引は`docs/README.md`。3計画・統合作業計画・開発ガイド等） |
 | `docker/` | ROS2 Humble 開発環境（dev）、実機ドライバ環境（`docker/driver/`）、Gazeboシミュレーション環境（`docker/sim/`） |
 | `ros2_ws/` | colcon ワークスペース。`build/`・`install/`・`log/` は gitignore 済み |
 | `external/` | 外部リポジトリの git submodule（`unitree_ros2`、`go2_ros2_sim_py`） |
@@ -40,7 +40,7 @@ git clone --recurse-submodules <このリポジトリのURL>
 cd docker
 docker compose build   # 初回のみ
 docker compose up -d
-docker compose exec ros2 bash
+docker compose exec ros2 zsh
 ```
 
 詳細（GUI表示・実機通信の設定等）は [`docker/README.md`](docker/README.md) を参照。
@@ -51,7 +51,7 @@ docker compose exec ros2 bash
 cd docker/driver
 docker compose build
 docker compose up -d
-docker compose exec driver bash
+docker compose exec driver zsh
 ```
 
 詳細は [`docker/driver/README.md`](docker/driver/README.md) を参照。
@@ -70,29 +70,28 @@ docker compose up -d
 ### ワークスペースのビルド
 
 ```bash
-# devコンテナ内
+# devコンテナ内(zshが既定。ROS2は自動source済み)
 cd ~/ros2_ws
 colcon build --symlink-install
-source install/setup.bash
+source install/setup.zsh
 ```
 
 ## 実装済みパッケージ（`ros2_ws/src/`）
 
 | パッケージ | 内容 |
 |-----------|------|
-| [`straight_line_planner`](ros2_ws/src/straight_line_planner) | 経路生成 Phase1 M1。自己位置から目標作業姿勢までの直線補間Pathを出す最小プランナ |
+| [`straight_line_planner`](ros2_ws/src/straight_line_planner) | 経路生成 Phase1 M1。自己位置から目標作業姿勢までの直線補間Pathを出す最小プランナ。Gazebo到達確認済み |
 | [`cmd_vel_safety`](ros2_ws/src/cmd_vel_safety) | 経路追従 M1。速度・加速度クランプとウォッチドッグ（0.5s）による安全機構 |
+| [`go2_localization`](ros2_ws/src/go2_localization) | 自己位置推定 M1/M2。robot_localization(EKF)+nav2_amcl の設定・起動一式 |
+| [`go2_path_following`](ros2_ws/src/go2_path_following) | 経路追従 M2。Nav2 controller_server(DWB)の最小構成+Path→FollowPathの橋渡しノード |
+| [`fake_localization_sensors`](ros2_ws/src/fake_localization_sensors) | Gazebo・実機なしでEKF確認するためのダミーOdometry/IMU Publisher |
 
-## 計画ドキュメント
+## ドキュメント
 
-- [`docs/作業計画.md`](docs/作業計画.md) — 3計画を横断した全体の依存関係・進行状況（正）
-- [`docs/計画_自己位置推定.md`](docs/計画_自己位置推定.md)
-- [`docs/計画_経路生成.md`](docs/計画_経路生成.md)
-- [`docs/計画_経路追従.md`](docs/計画_経路追従.md)
-- [`docs/開発ガイド.md`](docs/開発ガイド.md) — 開発の基本サイクル・ハマりがちな罠集
-- [`docs/docker要件定義.md`](docs/docker要件定義.md) — Docker環境の要件定義
+`docs/`配下のドキュメント一覧・読む順番は [`docs/README.md`](docs/README.md) を参照。
 
-現在の進捗は `docs/作業計画.md` の「履歴」節を正とする。
+現在の進捗は `docs/作業計画.md` の「履歴」節を正とする。実際に手を動かす手順は
+`docs/開発ガイド.md` を参照。
 
 ## コミット規約
 
