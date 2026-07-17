@@ -7,7 +7,8 @@
     自己位置推定 練習(自M1・自M2)用のbringupパッケージ。基本はrobot_localization(EKF)・
     pointcloud_to_laserscan・nav2_amcl/nav2_map_serverの設定ファイル+launchファイルで
     構成する。simコンテナ(go2_ros2_sim_py)が既に独自のNav2フルスタック(EKF+AMCL)を
-    起動しているため、tf衝突を避けるべくpublish_tf/tf_broadcastをfalseにし、推定結果は
+    起動しているため、tf衝突を避けるべくpublish_tf/tf_broadcastはtrueのまま出力先を
+    upstream本家の/robot1/tfとは別の/go2_localization/tfにremapし、推定結果も
     /go2_localization/以下のトピックとしてのみ出力する。唯一の自作ノード
     height_slice_vizは、RViz2のLaserScan表示が描画されない環境向けに、高さスライス後の
     点群をPointCloud2のまま可視化するデバッグ専用ノード。

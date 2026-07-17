@@ -1,6 +1,6 @@
 # straight_line_planner
 
-経路生成計画 Phase1 M1(`docs/計画_経路生成.md` §3.2)。自己位置から目標作業姿勢まで
+経路生成計画 Phase1 M1(`docs/計画/経路生成.md` §3.2)。自己位置から目標作業姿勢まで
 直線補間した `nav_msgs/Path` を出すだけの最小プランナ。Phase2で Nav2 の planner server に
 差し替えても経路追従側のI/Fが変わらないよう、トピック名・型をNav2に合わせている。
 
@@ -41,7 +41,11 @@ ros2 topic echo /plan --once
 - goal_pose受信 → 距離に応じた点数(0.1m間隔)で `plan` を配信することを確認
 - 中間点の向きが進行方向(atan2)になっていること、終端がゴールの姿勢と一致することを確認
 
+経路追従班(Nav2コントローラ)との統合は2026-07-14に確認済み(`go2_path_following`の
+`plan_follower`が本ノードの`plan`を購読しGazebo上でゴール到達まで確認。詳細は
+`go2_path_following/README.md`・Issue #21)。
+
 未実施:
 
-- Gazebo(`docker/sim/`)・実機での検証、部材正対精度・到達成功率の計測(§3.5の完了条件)
-- 経路追従班(Nav2コントローラ)との統合(Phase 2 / GATE1で実施)
+- Gazebo・実機での部材正対精度・到達成功率の**定量**計測(§3.5の完了条件。上記統合確認は
+  定性的な到達確認までで、精度の数値評価はGATE1のベースライン化と合わせてこれから)

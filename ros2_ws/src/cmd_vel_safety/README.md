@@ -1,6 +1,6 @@
 # cmd_vel_safety
 
-経路追従計画 M1(`docs/計画_経路追従.md` §3.2)の安全機構。速度・加速度の上限クランプと、
+経路追従計画 M1(`docs/計画/経路追従.md` §3.2)の安全機構。速度・加速度の上限クランプと、
 `cmd_vel`が途絶えたときに自動停止するウォッチドッグ(0.5s)を行う中継ノード。
 無線非常停止(ハード)はスコープ外。
 
@@ -57,4 +57,8 @@ Gazebo連携での確認(devコンテナ=Humble + simコンテナ=Jazzy、別コ
 
 - 実機での速度応答(遅れ・立ち上がり)込みの検証(計画書3.2-4)
 - 無線非常停止(ハードウェア)
-- テレオペ・Nav2コントローラからの実際のcmd_vel_rawとの結合(今回は`ros2 topic pub`での手動注入)
+- テレオペからの実際のcmd_vel_rawとの結合(今回は`ros2 topic pub`での手動注入)
+
+Nav2コントローラ(`go2_path_following`の`controller_server`)からの実際の`cmd_vel_raw`との
+結合は2026-07-14に確認済み(`launch/controller.launch.py`が`cmd_vel`を`/cmd_vel_raw`に
+リマップして本ノードへつなぐ構成。詳細は`go2_path_following/README.md`・Issue #21)。

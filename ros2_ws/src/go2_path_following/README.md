@@ -22,15 +22,15 @@ Nav2の`controller_server`は`FollowPath`アクション(`nav2_msgs/action/Follo
 `controller_server`は実際の`map→odom→base_link`のTFで現在位置を把握する。このTFの
 参照先を2段階で切り替える:
 
-- **フェーズA(現在の既定)**: upstream(sim本家)が既に配信している`/robot1/tf`を
-  そのまま参照する。`go2_localization`側の変更なしに`controller_server`・
-  `plan_follower`・`cmd_vel_safety`の配線自体が正しく動くかを先に確定させる
-- **フェーズB**: `go2_localization`のEKF/AMCLのTF配信を有効化した後、
-  `launch/controller.launch.py`の`('/tf', '/robot1/tf')`を
-  `('/tf', '/go2_localization/tf')`に変更し、自作の自己位置推定のTFで
-  経路追従できることを確認する
+- **フェーズA**: upstream(sim本家)が既に配信している`/robot1/tf`をそのまま参照する。
+  `go2_localization`側の変更なしに`controller_server`・`plan_follower`・
+  `cmd_vel_safety`の配線自体が正しく動くかを先に確定させるための、動作確認専用の段階
+  (現在は`launch/controller.launch.py`を書き換えないと戻せない)
+- **フェーズB(現在の既定)**: `go2_localization`のEKF/AMCLのTF配信を有効化した後、
+  `launch/controller.launch.py`の`/tf`remapを`/go2_localization/tf`にして、
+  自作の自己位置推定のTFで経路追従する。両フェーズともGazeboでの到達確認済み(下記)
 
-## 使い方(フェーズA)
+## 使い方(フェーズB、現在の既定)
 
 devコンテナ + simコンテナの両方を起動した状態で:
 
@@ -38,10 +38,12 @@ devコンテナ + simコンテナの両方を起動した状態で:
 cd ~/ros2_ws && colcon build --symlink-install --packages-select go2_path_following
 source install/setup.bash
 
-# 別ターミナルでそれぞれ起動
+# 別ターミナルでそれぞれ起動(フェーズBはgo2_localizationの起動が前提。
+# フェーズAで確認したい場合はcontroller.launch.pyの/tf remapを一時的に/robot1/tfへ戻す)
+ros2 launch go2_localization localization.launch.py
 ros2 launch go2_path_following controller.launch.py
 ros2 run go2_path_following plan_follower
-ros2 run straight_line_planner straight_line_planner_node
+ros2 run straight_line_planner straight_line_planner_node --ros-args -p use_sim_time:=true
 ros2 run cmd_vel_safety cmd_vel_safety_node --ros-args -r cmd_vel:=/robot1/cmd_vel
 ```
 
@@ -55,6 +57,20 @@ ros2 topic pub /goal_pose geometry_msgs/msg/PoseStamped \
 Gazebo上のGo2が実際に前進すれば配線は成功。RViz(sim側自動起動のもの)で`plan`と
 ロボットの動きを見比べるとわかりやすい。
 
-## 動作確認結果
+## 動作確認結果(2026-07-14、Issue #21)
 
-まだ未実施。
+フェーズA(upstream本家の`/robot1/tf`)・フェーズB(自作EKF/AMCLの`/go2_localization/tf`、
+`go2_localization`のTF配信を有効化した後)の両方で、上記手順どおりにGazebo上のGo2が
+実際にゴールまで到達することを確認した。
+
+詰まったところ: `straight_line_planner_node`を`ros2 run`で単体起動する際に`use_sim_time`の
+指定を忘れ、壁時計でPathをスタンプしていたため`controller_server`側で
+`Transform data too old when converting from map to odom`が出続けて`Failed to make progress`に
+なった(sim連携ノードは`use_sim_time:=true`の明示が必須、という基本の再確認)。
+
+未実施:
+
+- MPPIとの比較(Issue #22)
+- ローカルコストマップでの障害物回避(Issue #23、追M3)
+- ゴール姿勢誤差の定量評価(計画書M2の完了条件の精密な検証。GATE1の到達成功率・
+  部材正対精度のベースライン化もここに含む)
