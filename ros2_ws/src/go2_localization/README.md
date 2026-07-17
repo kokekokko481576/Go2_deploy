@@ -449,6 +449,48 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/ro
 `u/i/o/j/k/l/m/,/.`で並進・旋回、`k`で停止。ウィンドウ(teleop_twist_keyboardを
 実行しているターミナル)にフォーカスがないとキー入力を拾わないので注意。
 
+## 初期姿勢がズレたときの復旧(Issue #27)
+
+### 症状と原因
+
+localization起動**前**にteleop等でロボットを動かすと、その後起動しても自己位置が
+めちゃくちゃになる。AMCLは起動時に「map原点にいる」固定値でパーティクルを撒く
+(`amcl.yaml`の`set_initial_pose`/`initial_pose`)ため、実際の位置が原点でないと
+仮定が外れたまま誤収束する。**起動順で防げる**(localizationを先に起動してから動かす)が、
+やってしまった後の復旧手段が以下の2つ。
+
+### 復旧1(推奨): 正しい初期姿勢を与え直す
+
+ロボットの実位置(map座標)が分かるとき用。Gazebo画面から目測するか、upstream側が
+動いていれば `ros2 run tf2_ros tf2_echo map base_link --ros-args -r /tf:=/robot1/tf` で読む:
+
+```bash
+~/ros2_ws/src/go2_localization/scripts/set_initial_pose.sh 1.0 1.9 139   # x y yaw(度)
+```
+
+動作確認済み(2026-07-17): 原点から(1.01, 1.92, 139°)へ動かした後にlocalizationを
+起動して破綻を再現→本スクリプトで**誤差2cm程度まで即時復旧**した。
+
+### 復旧2(最後の手段): 大域再自己位置推定
+
+位置の見当が全くつかないとき用。パーティクルを地図全体に撒き直し、動き回りながら
+収束を待つ:
+
+```bash
+~/ros2_ws/src/go2_localization/scripts/relocalize_global.sh
+# その後teleopで動かし回り、ros2 topic echo /go2_localization/amcl_pose で収束を見る
+```
+
+**注意(実測)**: cafeワールドでは通路の対称性のため収束が不安定(2m付近まで寄った後、
+対称な別仮説へ十数m飛ぶ挙動を確認)。確実に直したいなら復旧1を使うこと。この
+「対称環境での誤収束」は自M3(#14)の評価項目そのもので、定量評価はそちらで行う。
+
+### あわせて入れた設定変更
+
+`amcl.yaml`の適応リカバリ(`recovery_alpha_slow: 0.001` / `recovery_alpha_fast: 0.1`、
+従来は0.0=無効)を有効化した。観測尤度が急落するとランダムパーティクルを自動注入する
+標準機構で、追跡が外れたときに自力回復の芽を残す。
+
 ## 動作確認結果(2026-07-13)
 
 - devコンテナ→simコンテナ(別ホスト名・別ROS2ディストロ、cyclonedds経由)で、
