@@ -48,6 +48,15 @@ launchシーケンス(spawn含む)をやり直す必要がある。
   理由: 顎3D LiDAR追加(下記)がxacro/launch本体の編集を要し、他コンテナのようなcompose override
   では対応できないため。upstreamへのPR送付は意図していない。submoduleの`upstream`リモートに
   元リポジトリを残してあり、upstream更新の追従自体は今後も可能
+- **`enable_nav2`起動引数を追加(2026-07-17、Issue #35)**: `gazebo_sim/launch/launch.py`と
+  `gazebo_multi_nav2_world.launch.py`に`enable_nav2`引数(既定`true`=従来挙動)を追加した。
+  `enable_nav2:=false`でupstream本家のNav2スタック一式(map_server/amcl/planner/controller/
+  behavior/smoother/bt_navigator/initialpose投入)を起動せず、Gazebo+ロボットspawn+歩容+
+  odom/EKF+センサブリッジのみになる。dev側の自作パイプライン(`go2_path_following`)による
+  GATE1定量計測時に、upstream側の`controller_server`(1個)+`behavior_server`(5個)が
+  `/robot1/cmd_vel`へ持つpublisherを排除して計測汚染を防ぐための口。あわせて`enable_rviz`も
+  `launch.py`からパススルーできるようにした。使い方は`go2_path_following/README.md`
+  「GATE1計測時のトピック確認」を参照
 - **顎(chin)搭載3D LiDARを追加(2026-07-12)**: `go2_description/xacro/robot.xacro`に
   `chin_lidar_frame`リンク、`gazebo.xacro`に垂直スキャン付き`gpu_lidar`センサを追加し、
   `gazebo_multi_nav2_world.launch.py`のros_gz_bridgeに`PointCloud2`のブリッジ行を追加した。
