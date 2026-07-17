@@ -7,7 +7,36 @@ Windows機で本リポジトリのsim+dev環境を動かすための手順書。
 
 想定: Windows 11 (Windows 10 22H2でも可)、AMD/Intel/NVIDIAいずれかのGPU。
 
-## 1. Windows側の準備
+## 最短手順(スクリプト3本、これをやるだけ)
+
+1. **GPUドライバをベンダー公式から最新に更新**(AMDならAdrenalin。ここだけ手動)
+2. **PowerShell(管理者)** で:
+
+   ```powershell
+   irm https://raw.githubusercontent.com/kokekokko481576/Go2_deploy/main/scripts/windows-setup.ps1 | iex
+   ```
+
+   WSL新規導入なら再起動→Ubuntuの初期ユーザ作成まで済ませる
+3. **Ubuntu(WSL2)のターミナル** で:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/kokekokko481576/Go2_deploy/main/scripts/wsl2-setup.sh | bash
+   ```
+
+   [OK]/[NG]の自己診断つき。NGが出たら指示に従って解消→再実行(何度でも安全)
+4. **ターミナルを開き直して**:
+
+   ```bash
+   cd ~/Go2_deploy && ./scripts/first-run.sh
+   ```
+
+   ビルド(初回15〜40分)→起動→DDS疎通チェックまで自動。最後に「全チェック通過」と
+   Gazebo GUIウィンドウ(目視)が確認できたら完了。詰まったら[NG]メッセージ内の
+   issue番号(#28/#29/#30)へ記録
+
+以降の節は、スクリプトが中でやっていることの説明と、詰まったとき用の詳細。
+
+## 1. Windows側の準備(windows-setup.ps1がやること)
 
 1. **GPUドライバをベンダー公式から最新に更新**(AMDなら Adrenalin)。
    WSL2のGPU仮想化(/dev/dxg)はWindows側のWDDMドライバが担うため、これが古いと
@@ -30,7 +59,7 @@ Windows機で本リポジトリのsim+dev環境を動かすための手順書。
    ※実機Go2との接続(#31)をやる段になったら `networkingMode=mirrored` が要るが、
    sim+devだけなら**不要**。今は書かない
 
-## 2. WSL2のUbuntu側の準備
+## 2. WSL2のUbuntu側の準備(wsl2-setup.shがやること)
 
 Ubuntuのターミナル(wsl起動)で:
 
@@ -63,7 +92,7 @@ Ubuntuのターミナル(wsl起動)で:
    `/dev/dri`が無い場合はWindows側GPUドライバ更新→`wsl --shutdown`→再試行。
    それでも無ければトラブルシュート参照(ソフトレンダリングで進める手はある)
 
-## 3. リポジトリ取得
+## 3. リポジトリ取得(wsl2-setup.shがやること)
 
 1. **cloneは必ずWSL2側のファイルシステム(`~/`配下)に置く**。`/mnt/c/...`(Windows側)に
    置くとビルドが激遅になり、改行コード問題も踏む(ルートREADMEの注意と同じ。#32)
@@ -77,7 +106,7 @@ Ubuntuのターミナル(wsl起動)で:
 
    (chapter1はupdate=noneなので取得されなくて正常)
 
-## 4. ビルドと起動(ここからはUbuntuと同じ)
+## 4. ビルドと起動(first-run.shがやること)
 
 ```bash
 cd ~/Go2_deploy/docker/sim
