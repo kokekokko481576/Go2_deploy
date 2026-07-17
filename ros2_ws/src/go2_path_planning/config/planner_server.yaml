@@ -1,0 +1,48 @@
+/**:
+  planner_server:
+    ros__parameters:
+      use_sim_time: true
+      # 実際の計画はComputePathToPoseアクション要求ごと(plan_requester経由)。
+      # この値は「この頻度で計画要求が来る想定」の警告しきい値でしかない
+      expected_planner_frequency: 1.0
+      planner_plugins: ["GridBased"]
+      GridBased:
+        plugin: "nav2_navfn_planner/NavfnPlanner"
+        tolerance: 0.5
+        # ダイクストラ法(Issue #16の本命)。trueにするとA*に切り替わる
+        use_astar: false
+        allow_unknown: true
+
+  # 生M2はstatic(既知地図)+inflationの2層(docs/計画/経路生成.md §3.3)。
+  # obstacle layer(顎LiDARのライブスキャン)は生M3(Issue #18)で追加する
+  global_costmap:
+    global_costmap:
+      ros__parameters:
+        use_sim_time: true
+        update_frequency: 1.0
+        publish_frequency: 1.0
+        global_frame: map
+        robot_base_frame: base_link
+        rolling_window: false
+        track_unknown_space: true
+        resolution: 0.05
+        # footprintはgo2_path_followingのlocal_costmapと同じ共有定義(C5)
+        footprint: "[ [0.35, 0.18], [0.35, -0.18], [-0.38, -0.18], [-0.38, 0.18] ]"
+        plugins: ["static_layer", "inflation_layer"]
+        static_layer:
+          plugin: "nav2_costmap_2d::StaticLayer"
+          # 自作map_server(go2_localizationが起動)の地図を購読する。
+          # upstream(/robot1/...)とは分離した専用トピック
+          map_topic: /go2_localization/map
+          map_subscribe_transient_local: true
+        inflation_layer:
+          plugin: "nav2_costmap_2d::InflationLayer"
+          cost_scaling_factor: 4.0
+          inflation_radius: 0.45
+        always_send_full_costmap: true
+
+  lifecycle_manager_planning:
+    ros__parameters:
+      use_sim_time: true
+      autostart: true
+      node_names: ["planner_server"]
