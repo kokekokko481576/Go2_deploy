@@ -2,7 +2,7 @@
 # 素のUnicode(絵文字含む)だけで構成し、どのターミナルでも文字化けしないようにしてある。
 add_newline = false
 
-format = """$directory$git_branch$git_status$custom.ros_distro$character"""
+format = """$directory$git_branch$git_status${custom.ros_distro}$character"""
 
 [character]
 success_symbol = "[❯](bold green)"
