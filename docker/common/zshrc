@@ -39,18 +39,29 @@ alias cbp='colcon build --symlink-install --packages-select'
 # --- ROS2(ROS_DISTROはベースイメージ側で既に設定済み) ---
 [ -f "/opt/ros/${ROS_DISTRO}/setup.zsh" ] && source "/opt/ros/${ROS_DISTRO}/setup.zsh"
 
-# --- Humble⇔Jazzy混在による既知の無害なDDS警告をstderrから間引く(issue #7) ---
+# --- Humble⇔Jazzy混在による既知の無害なDDS警告を間引く(issue #7) ---
 # 対象: type hash警告(Jazzy側)・rcutilsエラー上書き通知ブロック(Humble側)・
 #       CycloneDDSのデシリアライズ長エラー。実データへの影響は無いことを確認済み。
-# 生のstderrを見たいとき(警告そのものの調査等)は: ROS2_NOFILTER=1 ros2 ...
+# `ros2 launch`/`ros2 run`は子ノードのstderrを自分のstdoutに多重化して出すため、
+# この2つに限りstdout側も濾す(他のサブコマンドのstdoutはデータなので触らない)。
+# ブロック削除ではなく行単位のパターン削除なのは、launchの`[node-1]`プレフィックス付きで
+# 複数プロセスの行が混ざっても(interleave)安全に落とせるようにするため。
+# 生ログを見たいとき(警告そのものの調査等)は: ROS2_NOFILTER=1 ros2 ...
 # 詳細: docs/解説/Humble-Jazzy混在DDS警告.md
+_ROS2_NOISE_SED='/>>> \[rcutils/d;/This error state is being overwritten/d;/with this new error message/d;/invalid data size, at \./d;/string data is not null-terminated/d;/rcutils_reset_error() should be called/d;/Failed to parse type hash/d;/sequence size exceeds remaining buffer/d;/^\[[^]]*\] <<<$/d;/^<<<$/d;/^\[[^]]*\] *$/d'
 ros2() {
     if [[ -n "${ROS2_NOFILTER:-}" ]]; then
         command ros2 "$@"
-    else
-        command ros2 "$@" 2> >(sed -u \
-            -e '/>>> \[rcutils|error_handling/,/^<<</d' \
-            -e '/Failed to parse type hash/d' \
-            -e '/sequence size exceeds remaining buffer/d' >&2)
+        return
     fi
+    case "${1:-}" in
+        launch|run)
+            command ros2 "$@" \
+                > >(sed -u "$_ROS2_NOISE_SED") \
+                2> >(sed -u "$_ROS2_NOISE_SED;/^ *$/d" >&2)
+            ;;
+        *)
+            command ros2 "$@" 2> >(sed -u "$_ROS2_NOISE_SED;/^ *$/d" >&2)
+            ;;
+    esac
 }
