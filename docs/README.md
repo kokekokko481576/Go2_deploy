@@ -27,6 +27,7 @@
 
 - [`解説/自己位置推定のしくみ.md`](解説/自己位置推定のしくみ.md) — EKF+AMCLが何をしているかのやさしい解説
 - [`解説/外部サブモジュールの使い方.md`](解説/外部サブモジュールの使い方.md) — git submodule(fork/upstream運用)の解説
+- [`解説/Humble-Jazzy混在DDS警告.md`](解説/Humble-Jazzy混在DDS警告.md) — launch時の大量警告の原因(型ハッシュ・GID変更)と対処(issue #7)
 
 ## 手順(どう確認するか — 動作確認手順書)
 
