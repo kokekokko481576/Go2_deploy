@@ -12,6 +12,14 @@ X="${1:-3.0}"
 Y="${2:-0.0}"
 YAW_DEG="${3:-0.0}"
 
+# typo対策(例: "3.0.0.0" スペースのつもりがドット)。数値以外は即エラーで止める
+for v in "$X" "$Y" "$YAW_DEG"; do
+  if ! [[ "$v" =~ ^[+-]?[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "error: '$v' は数値ではありません。使い方: send_goal.sh [x] [y] [yaw度] (スペース区切り)" >&2
+    exit 1
+  fi
+done
+
 # yaw(度)→クォータニオン(z,w)。roll/pitchは0固定
 # (awkはdevコンテナに入っていないためpython3を使う。ROS2環境なら必ず存在する)
 read -r QZ QW < <(python3 -c "import math, sys
