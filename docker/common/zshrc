@@ -38,3 +38,19 @@ alias cbp='colcon build --symlink-install --packages-select'
 
 # --- ROS2(ROS_DISTROはベースイメージ側で既に設定済み) ---
 [ -f "/opt/ros/${ROS_DISTRO}/setup.zsh" ] && source "/opt/ros/${ROS_DISTRO}/setup.zsh"
+
+# --- Humble⇔Jazzy混在による既知の無害なDDS警告をstderrから間引く(issue #7) ---
+# 対象: type hash警告(Jazzy側)・rcutilsエラー上書き通知ブロック(Humble側)・
+#       CycloneDDSのデシリアライズ長エラー。実データへの影響は無いことを確認済み。
+# 生のstderrを見たいとき(警告そのものの調査等)は: ROS2_NOFILTER=1 ros2 ...
+# 詳細: docs/解説/Humble-Jazzy混在DDS警告.md
+ros2() {
+    if [[ -n "${ROS2_NOFILTER:-}" ]]; then
+        command ros2 "$@"
+    else
+        command ros2 "$@" 2> >(sed -u \
+            -e '/>>> \[rcutils|error_handling/,/^<<</d' \
+            -e '/Failed to parse type hash/d' \
+            -e '/sequence size exceeds remaining buffer/d' >&2)
+    fi
+}
