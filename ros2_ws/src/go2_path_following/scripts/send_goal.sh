@@ -28,6 +28,9 @@ print(f'{math.sin(r):.6f} {math.cos(r):.6f}')" "$YAW_DEG") || {
   echo "error: yaw->quaternion変換に失敗しました" >&2; exit 1; }
 
 echo "publish /goal_pose: x=${X} y=${Y} yaw=${YAW_DEG}deg (qz=${QZ} qw=${QW})"
+# --onceはsubscriberマッチング前にpublishして落とすことがあるため、
+# -w 1(マッチ待ち)+複数回送信にしている(set_initial_pose.shと同じ対策)。
+# Humble⇔Jazzy混在環境では配送が遅延する場合があるため3回に増やしてある(#7周辺症状)
 exec ros2 topic pub /goal_pose geometry_msgs/msg/PoseStamped \
   "{header: {frame_id: map}, pose: {position: {x: ${X}, y: ${Y}}, orientation: {z: ${QZ}, w: ${QW}}}}" \
-  --once
+  -w 1 -t 3 -r 1

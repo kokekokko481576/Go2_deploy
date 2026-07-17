@@ -31,8 +31,8 @@ print(f'{math.sin(r):.6f} {math.cos(r):.6f}')" "$YAW_DEG") || {
 echo "publish /go2_localization/initialpose: x=${X} y=${Y} yaw=${YAW_DEG}deg"
 # 共分散はRVizの2D Pose Estimateと同じ既定値(xy 0.25, yaw 0.068)。
 # --onceはsubscriberマッチング前にpublishして落とすことがあるため、
-# -w 1(マッチ待ち)+2回送信にしている
+# -w 1(マッチ待ち)+複数回送信にしている(混在環境の配送遅延対策、#7周辺症状)
 exec ros2 topic pub /go2_localization/initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
   "{header: {frame_id: map}, pose: {pose: {position: {x: ${X}, y: ${Y}}, orientation: {z: ${QZ}, w: ${QW}}},
     covariance: [0.25,0,0,0,0,0, 0,0.25,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0.0685]}}" \
-  -w 1 -t 2 -r 1
+  -w 1 -t 3 -r 1
