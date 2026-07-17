@@ -34,9 +34,16 @@ amcl:
     update_min_d: 0.25
     resample_interval: 1
     transform_tolerance: 1.0
-    recovery_alpha_fast: 0.0
-    recovery_alpha_slow: 0.0
+    # 適応リカバリ(Augmented MCL)。観測尤度の短期平均が長期平均を下回ると
+    # ランダムパーティクルを注入し、初期姿勢の仮定が外れていても自力回復の芽を残す
+    # (Issue #27。0.0/0.0だと完全無効=一度誤収束すると戻れない)。値はProbabilistic
+    # Robotics/nav2ドキュメントの推奨値
+    recovery_alpha_slow: 0.001
+    recovery_alpha_fast: 0.1
     save_pose_rate: 0.5
+    # 起動時は「map原点にいる」前提でタイトに撒く。teleop等で原点から動かした後に
+    # localizationを起動するとこの仮定が外れて破綻する(Issue #27)。その場合は
+    # scripts/set_initial_pose.sh か scripts/relocalize_global.sh で復旧する
     set_initial_pose: true
     initial_pose:
       x: 0.0

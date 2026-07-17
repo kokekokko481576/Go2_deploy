@@ -31,6 +31,9 @@ def generate_launch_description():
             ('map', '/go2_localization/map'),
             ('amcl_pose', '/go2_localization/amcl_pose'),
             ('particlecloud', '/go2_localization/particlecloud'),
+            # 初期姿勢の再指定入力(Issue #27、scripts/set_initial_pose.sh が使う)。
+            # 他トピックと同様に専用名前空間へ分離しておく
+            ('initialpose', '/go2_localization/initialpose'),
             # odom->base_link入力・map->odom出力とも自前のEKFと同じ専用トピックを使う
             # (upstreamの/robot1/tfとは分離)。静止TFはupstreamから読み続ける
             ('/tf', '/go2_localization/tf'),
