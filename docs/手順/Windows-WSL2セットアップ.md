@@ -16,15 +16,39 @@ Windows機で本リポジトリのsim+dev環境を動かすための手順書。
    irm https://raw.githubusercontent.com/kokekokko481576/Go2_deploy/main/scripts/windows-setup.ps1 | iex
    ```
 
-   WSL新規導入なら再起動→Ubuntuの初期ユーザ作成まで済ませる
-3. **Ubuntu(WSL2)のターミナル** で:
+   <details open><summary>WSL新規導入なら再起動→Ubuntuの初期ユーザ作成まで済ませる</summary>
+      
+      WSLを初めてインストールした環境では、スクリプト実行後にWindowsの再起動が必須である。
+      
+      再起動後、自動でUbuntuのターミナルが開くため、画面の指示に従って初期ユーザー名とパスワードの設定を済ませること。
+   
+      万が一、再起動後にUbuntuが起動しない、または「ディストリビューションはありません」という旨のエラーが出た場合は、再度PowerShell(管理者)を開き、以下のコマンドを手動で実行してUbuntuをインストールすること。
+      
+      ```PowerShell
+      wsl --install
+      ```
+      こんなかんじ
+      <img width="1391" height="1117" alt="image" src="https://github.com/user-attachments/assets/9cd0bc4f-cab8-47e0-b6a2-a201f23ae79b" />
+
+      wslを入れた後なら、PowerShellを起動して
+
+      ```PowerShell
+      wsl
+      ```
+      と打ったらいつでも起動できるようになる
+   </details>
+   
+   
+   
+
+4. **Ubuntu(WSL2)のターミナル** で:
 
    ```bash
    curl -fsSL https://raw.githubusercontent.com/kokekokko481576/Go2_deploy/main/scripts/wsl2-setup.sh | bash
    ```
 
    [OK]/[NG]の自己診断つき。NGが出たら指示に従って解消→再実行(何度でも安全)
-4. **ターミナルを開き直して**:
+5. **ターミナルを開き直して**:
 
    ```bash
    cd ~/Go2_deploy && ./scripts/first-run.sh
