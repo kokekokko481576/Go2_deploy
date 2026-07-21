@@ -6,20 +6,23 @@ ROS2 Humble + Nav2 + robot_localization + slam_toolbox + Gazebo など、
 
 ## できること / できないこと
 
-| 項目 | 可否 |
-|------|------|
-| ROS2 Humble での開発・ビルド（colcon） | ○ |
-| Nav2（planner / controller server）の構成・検証 | ○ |
-| Gazebo シミュレーション（新 Gazebo = Fortress。コマンドは `ign gazebo`、`gz` ではない） | ○ Ubuntu+iGPU / △ Mac（GPU なし・低速） |
-| RViz2 などの GUI | ○ Ubuntu（ネイティブX11・iGPUでOpenGL 4.6を確認） / △ Mac（XQuartz 経由） |
-| Isaac Sim / Isaac Lab | × NVIDIA GPU 必須。本イメージ・本開発機（iGPUのみ）では不可（GPU 搭載 Linux 機で別途） |
-| 実機 Go2 との DDS 通信 | ○ Ubuntu（`network_mode: host` 有効化済み） / △ Mac（ホストネットワーク設定に制約） |
+Windows(WSL2) 列は #28 のスクリプト整備までは完了し、**実 Windows ハードウェアでの
+検証を進行中**の暫定値（🔍=検証中）。確定したら本表を更新する。
 
-> **Windows**: WSL2ネイティブ運用（WSL2内にDocker Engineを入れ、WSL2のLinuxシェルから
-> `docker compose` を実行）を前提に対応を進めている（検証中、issue #28）。リポジトリは
-> WSL2側のLinuxファイルシステム（`~/` 以下）にcloneすること（`/mnt/c/...` はCRLF混入・
-> bind mount低速化のため不可）。GUI（WSLg）・DDS疎通の検証が済むまで、上表と本README
-> の手順は Ubuntu / Mac のみを記載している。
+| 項目 | Ubuntu | macOS | Windows (WSL2) |
+|------|--------|-------|----------------|
+| ROS2 Humble での開発・ビルド（colcon） | ○ | ○ | 🔍 WSL2内Ubuntu 22.04+Docker Engine（Linuxと等価の想定） |
+| Nav2（planner / controller server）の構成・検証 | ○ | ○ | 🔍 同上（sim⇔dev構成で検証中） |
+| Gazebo シミュレーション（新 Gazebo = Fortress。コマンドは `ign gazebo`、`gz` ではない） | ○ iGPU | △ GPU なし・低速 | 🔍 WSLg経由。GPUドライバ次第で D3D12 描画/ソフトレンダリング（#29） |
+| RViz2 などの GUI | ○ ネイティブX11・iGPUでOpenGL 4.6を確認 | △ XQuartz 経由 | 🔍 WSLg（`/tmp/.X11-unix` パススルー、xhost不要の想定）（#29） |
+| Isaac Sim / Isaac Lab | × iGPUのみで不可 | × | × NVIDIA GPU必須。WSL2 GPU対応可否は調査中（#33） |
+| 実機 Go2 との DDS 通信 | ○ `network_mode: host` 有効化済み | △ ホストネットワーク設定に制約 | 🔍 `networkingMode=mirrored`＋Hyper-Vファイアウォール設定が別途必要な見込み（#31） |
+
+> **Windows の前提**: WSL2ネイティブ運用（WSL2内にDocker Engineを入れ、WSL2のLinuxシェルから
+> `docker compose` を実行。Docker Desktopは使わない）。リポジトリは必ず WSL2側のLinux
+> ファイルシステム（`~/` 以下）にcloneすること（`/mnt/c/...` はCRLF混入・bind mount低速化のため不可）。
+> セットアップは `docs/手順/Windows-WSL2セットアップ.md`（スクリプト3本を上から実行するだけ）。
+> sim⇔dev の DDS 疎通（#30）・GUI 表示（#29）は自己診断スクリプトで確認でき、結果を各 issue に記録する。
 
 ## 使い方
 
@@ -67,6 +70,12 @@ source install/setup.zsh
 
 `DISPLAY=${DISPLAY}` と `/tmp/.X11-unix` マウント、iGPU(`/dev/dri`)渡し込みは compose.yaml で有効化済み。
 iGPU機での実機確認で `OpenGl version: 4.6` を確認済み（ソフトウェアレンダリングにフォールバックしない）。
+
+### Windows (WSL2)
+
+WSLg 経由で自動的に X11 が通る（`DISPLAY` と `/tmp/.X11-unix` は WSL2 が用意）。
+compose.yaml の Ubuntu 設定がそのまま流用でき、`xhost` は通常不要。
+詳細・トラブルシュートは `docs/手順/Windows-WSL2セットアップ.md` を参照（検証中・#29）。
 
 ### macOS
 
