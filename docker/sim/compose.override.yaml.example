@@ -1,0 +1,13 @@
+# /dev/dri が無い環境(WSL2でGPU仮想化が未整備等)で `docker compose up` が
+# "error gathering device information while adding custom device /dev/dri" で
+# 失敗する場合の回避策テンプレート。GPU渡しを外してソフトレンダリングで起動する。
+#
+# 使い方: このファイルを compose.override.yaml という名前でコピーすれば有効化される
+# (コピー先はgitignore対象なのでコミットされない)。
+#   cp docker/sim/compose.override.yaml.example docker/sim/compose.override.yaml
+#
+# /dev/dri が生えたら(GPUドライバ更新 + wsl --shutdown後など)、コピーした
+# compose.override.yaml を削除すれば既定のGPUパススルー構成に戻る。
+services:
+  sim:
+    devices: !reset []

@@ -16,3 +16,7 @@ __pycache__/
 # Obsidian: ウィンドウ状態などローカル限定の情報。共有設定(appearance/core-plugins等)は追跡する
 .obsidian/workspace.json
 .obsidian/workspace-mobile.json
+
+# 環境固有のcompose上書き(例: /dev/driが無い環境でのGPU渡し無効化)。ローカル限定
+docker/compose.override.yaml
+docker/sim/compose.override.yaml

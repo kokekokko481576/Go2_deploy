@@ -166,9 +166,20 @@ ros2 topic echo /robot1/odometry/filtered --once   # 実データが届くこと
   `docker exec -it go2-sim bash -c "apt list --installed 2>/dev/null | grep mesa-utils || apt-get install -y mesa-utils; glxinfo -B"`
   で `renderer` に **D3D12 (GPU名)** が出ればGPU有効、`llvmpipe` ならソフトレンダリング。
   ソフトレンダリングでも動作はする(遅いだけ)ので、検証を先に進めて構わない
-- **`/dev/dri`が無くて `docker compose up` が失敗する**: compose.yamlの
-  `devices: /dev/dri` が原因。Windows側ドライバ更新で生えるのが本筋だが、
-  暫定は compose.override.yaml で `devices` を空にして起動(ソフトレンダリング)
+- **`/dev/dri`が無くて `docker compose up` が失敗する**(`error gathering device
+  information while adding custom device "/dev/dri"`): compose.yamlの
+  `devices: /dev/dri` が原因。Windows側ドライバ更新で生えるのが本筋(GPUドライバ更新後、
+  PowerShellで `wsl --shutdown` → 再起動 → `ls /dev/dri` で確認)。
+  それでも無理なら、GPU渡しを外してソフトレンダリングで起動する回避策テンプレートを
+  コピーして有効化する(コピー先はgitignore対象。既定のGPUパススルー構成には影響しない):
+
+  ```bash
+  cp docker/compose.override.yaml.example docker/compose.override.yaml
+  cp docker/sim/compose.override.yaml.example docker/sim/compose.override.yaml
+  ```
+
+  `/dev/dri`が後で生えたら、コピーした2つの `compose.override.yaml` を削除すれば
+  既定のGPUパススルー構成に戻る
 - **GUIウィンドウが出ない**: `echo $DISPLAY`(WSL2側)が空ならWSLgが動いていない。
   `wsl --update` → `wsl --shutdown` → 再起動。xhostは通常不要だが、
   権限エラーが出たら `xhost +local:` を試す

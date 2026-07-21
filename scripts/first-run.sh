@@ -17,8 +17,8 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 echo "=== 1/3 ビルドと起動(初回は合計15〜40分。コーヒーでも) ==="
-(cd docker/sim && docker compose build sim && docker compose up -d) || { ng "simのビルド/起動に失敗"; exit 1; }
-(cd docker && docker compose build && docker compose up -d) || { ng "devのビルド/起動に失敗"; exit 1; }
+(cd docker/sim && docker compose build sim && docker compose up -d) || { ng "simのビルド/起動に失敗(/dev/dri関連なら docker/sim/compose.override.yaml.example を参照)"; exit 1; }
+(cd docker && docker compose build && docker compose up -d) || { ng "devのビルド/起動に失敗(/dev/dri関連なら docker/compose.override.yaml.example を参照)"; exit 1; }
 ok "go2-sim / arbeit-ros2 を起動した"
 
 echo "=== 2/3 Gazebo起動待ち(最大3分) ==="
