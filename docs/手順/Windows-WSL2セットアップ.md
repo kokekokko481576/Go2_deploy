@@ -7,6 +7,16 @@ Windows機で本リポジトリのsim+dev環境を動かすための手順書。
 
 想定: Windows 11 (Windows 10 22H2でも可)、AMD/Intel/NVIDIAいずれかのGPU。
 
+**事前に用意するもの(前提)**:
+
+- **ストレージ空き容量: 30〜40GB を推奨**(最低25GB)。内訳は Docker イメージ実測で
+  sim(`go2-sim:jazzy`)約7.6GB + dev(`arbeit-ros2:humble`)約6.0GB に、WSL2/Ubuntu/Docker基盤
+  約3.5GB、初回ビルド中の中間レイヤ・キャッシュが一時的に+10〜15GB。ビルド完了後の実効は
+  約18GBだが、ビルド中のピークで詰まると初回ビルド(15〜40分)が失敗するため余裕を持たせる。
+  ビルド後に一時領域を回収したければ `docker builder prune` でキャッシュ分を空けられる。
+  (実機driver 1.6GB は #31 の段階まで不要)
+- **メモリ(RAM): 16GB 以上を推奨**。`.wslconfig` で `memory=12GB` をWSL2に割り当てる(ビルドとGazeboで食う)。
+
 ## 最短手順(スクリプト3本、これをやるだけ)
 
 1. **GPUドライバをベンダー公式から最新に更新**(AMDならAdrenalin。ここだけ手動)
