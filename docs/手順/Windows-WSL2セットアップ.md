@@ -198,3 +198,8 @@ ros2 topic echo /robot1/odometry/filtered --once   # 実データが届くこと
   (`docker ps`)、`ROS_DOMAIN_ID=0`のままかを確認。Windows版Dockerの
   host networkingはWSL2内では「WSL2カーネルのホストネットワーキング」なので
   Ubuntuと同条件のはず(ここが崩れていたら#30に詳細を記録)
+- **WSL2からネットワークに繋がらない例があった**(apt/curl/DNSが通らない等): ある1台で
+  発生した**PC固有の事象**。WSL2の仮想NIC/DNS周りが原因になりやすく、`wsl --shutdown`後の
+  再起動や `/etc/resolv.conf`・`.wslconfig` のネットワーク設定見直しで直る場合がある。
+  ただしWSL2はネットワーク層の不確実性が残るため、**本格運用や実機DDS接続はデュアルブート
+  (ネイティブUbuntu)を推奨**。導入は `docs/手順/デュアルブート構築.md`。
