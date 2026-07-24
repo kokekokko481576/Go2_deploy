@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # GATE1定量計測スクリプト (Issue #36)
-# 使い方: ./scripts/gate1_measure.sh [trials]
-# 複数回ゴール投入・到達を試行し、成功率・誤差をログに記録
+# 使い方(devコンテナ内): ./gate1_measure.sh [trials]
+# 複数回ゴール投入・到達を試行し、成功率・誤差をログに記録。
+# ros2 を呼ぶため dev コンテナ内(ROS環境)で実行すること。同ディレクトリの send_goal.sh を使う。
 
 TRIALS="${1:-50}"
 RESULTS_DIR="/tmp/gate1_results_$(date +%Y%m%d_%H%M%S)"
@@ -23,7 +24,7 @@ for i in $(seq 1 $TRIALS); do
   printf "[%3d/%d] Goal=(%5.2f, %5.2f, %6.1f°) " "$i" "$TRIALS" "$X" "$Y" "$YAW"
   
   # ゴール投入
-  ./scripts/send_goal.sh "$X" "$Y" "$YAW" >/dev/null 2>&1
+  "$(dirname "$0")/send_goal.sh" "$X" "$Y" "$YAW" >/dev/null 2>&1
   
   # 到達待機（目安15秒）
   sleep 12

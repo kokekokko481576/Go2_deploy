@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GATE1定量計測結果の解析スクリプト (Issue #36)
-使い方: ./scripts/gate1_analyze.py <results_directory>
+使い方(devコンテナ内): ./gate1_analyze.py <results_directory>
 """
 
 import sys
