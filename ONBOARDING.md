@@ -98,7 +98,7 @@ docker exec arbeit-ros2 bash -c 'source /opt/ros/humble/setup.bash && ros2 topic
 ```
 GazeboのGUIウィンドウ（カフェ+ロボット）が出て、上のトピックが見えれば環境は完成。
 次の一歩は経路追従の動作確認 → `ros2_ws/src/go2_path_following/README.md` の「使い方(フェーズB)」。
-ゴール投入は `scripts/send_goal.sh <x> <y> <yaw度>`。
+ゴール投入は dev コンテナ内で `ros2_ws/src/go2_path_following/scripts/send_goal.sh <x> <y> <yaw度>`。
 
 ---
 

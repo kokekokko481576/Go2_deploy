@@ -1,270 +1,226 @@
-# scripts/ — セットアップ・計測スクリプト一覧
+# scripts/ — セットアップ・起動・計測スクリプト
 
-このディレクトリは、Go2_deploy プロジェクトの環境構築・動作確認・定量計測スクリプトをまとめています。
+Go2_deploy の環境構築・日常起動・定量計測をまとめたスクリプト集。
+
+> スクリプトは2種類。**ホスト側**（repo直下 `scripts/`：docker を外から操作）と、
+> **dev コンテナ内**（`ros2_ws/src/go2_path_following/scripts/`：`ros2` を直接呼ぶもの）。
+
+## まず最初に：どれを使う？
+
+| やりたいこと | 使うもの |
+|---|---|
+| **毎日の開発を始める**（docker起動〜自作スタック起動を一発） | [`dev-up.sh`](#dev-upsh--日常の起動-まずこれ) |
+| **新しいマシンに初めて構築する** | [初回セットアップ](#初回セットアップ新しいマシンで1回だけ) |
+| **GATE1 の精度を計測する** | [`gate1_measure.sh` / `gate1_analyze.py`](#gate1-定量計測) |
+| **ゴールを1回投げたいだけ** | [`send_goal.sh`](#ゴール投入-send_goalsh) |
 
 ---
 
-## 🚀 初回セットアップ（最初の1回だけ）
-
-新しいマシンにリポジトリを構築するときは、以下を **上から順に** 実行してください。
-
-### 1. `ubuntu-setup.sh` — ホスト側準備（Ubuntu）
+## `dev-up.sh` — 日常の起動（まずこれ）
 
 ```bash
+cd ~/bridge/Go2_deploy && ./scripts/dev-up.sh
+```
+
+これ1本で **docker(sim/dev)起動 → ロボット起動待ち → `colcon build` → 自作スタックの起動** まで進む。
+起動後は「**自分が新規開発したノードを別ターミナルで動かすだけ**」の状態になる。
+
+### 何を起動するか対話で選ぶ
+
+実行すると3つ聞かれる。**自作サブシステムの中身を知らなくてもブラックボックスとして起動できる**のが狙い。
+
+```
+[1] 自己位置推定 (/go2_localization/tf の供給元)
+    1) 実装済み推定 (EKF/AMCL)  ← 既定
+    2) 自作 (起動しない。自分で /go2_localization/tf を出す)
+[2] 経路生成の見本(straight_line_planner)を起動する? [Y/n]
+[3] 経路追従(controller_server)を起動する? [Y/n]
+```
+
+- **自己位置推定を自作する人** → [1] で `2)` を選び、自分の推定が `/go2_localization/tf` を出す。
+- **経路生成が本命の人** → [2] を `n`。自分のプランナを別ターミナルで起動（起動後にコマンド例が出る）。
+- **経路追従(controller)を改良する人** → [3] を `Y`（or 自分の複製を使うなら `n`）。
+
+`plan_follower`（/plan → 追従命令の橋渡し）と `cmd_vel_safety`（速度の安全弁）は**常時起動**。
+
+### 起動後の流れ
+
+`dev-up.sh` はログを流しながら**前景で動き続ける**（`Ctrl-C` で停止）。操作は**別ターミナル**で：
+
+```bash
+# コンテナに入る
+docker exec -it arbeit-ros2 zsh
+
+# ゴールを投げる(/goal_pose は自分で出す)
+~/ros2_ws/src/go2_path_following/scripts/send_goal.sh 3.0 0.0   # 3m 前方へ
+```
+
+### オプション
+
+| フラグ | 意味 |
+|---|---|
+| `--gate1` | GATE1計測モード。sim 付属の upstream Nav2 を止め、自作スタックだけで駆動する |
+| `--no-build` | `colcon build` を飛ばす（直前のビルドを使う） |
+| `-h`, `--help` | ヘルプ |
+
+> **配線（参考）**：`/goal_pose → straight_line_planner(/plan) → plan_follower → controller_server(→/cmd_vel_raw) → cmd_vel_safety(→/robot1/cmd_vel) → ロボット`
+
+---
+
+## 初回セットアップ（新しいマシンで1回だけ）
+
+`dev-up.sh` を使う前に、マシンを1回だけ構築する。**上から順に**実行する。
+
+### ネイティブ Ubuntu
+
+| 順 | スクリプト | 何をするか |
+|---|---|---|
+| ① | `ubuntu-setup.sh` | gh CLI・Docker Engine 導入、GUI許可(`xhost`)、GPU確認 |
+| ② | `ubuntu-clone.sh` | `~/bridge/Go2_deploy/` に clone、submodule取得、GPU無し時の override 生成 |
+| ③ | `first-run.sh` | sim/dev の**初回ビルド**＋起動＋**DDS疎通の自動チェック** |
+
+```bash
+# ① ホスト準備（実行後、ターミナルを開き直す = docker グループ反映）
 curl -fsSL https://raw.githubusercontent.com/kokekokko481576/Go2_deploy/main/scripts/ubuntu-setup.sh | bash
-```
 
-**何をするのか:**
-- gh CLI（GitHub CLI）を導入
-- Docker Engine + compose plugin を導入
-- `xhost +local:docker` を `~/.bashrc` / `~/.zshrc` に追記（コンテナからのGUI描画を許可）
-- `/dev/dri`（GPU）の有無を確認
-
-**対象環境:**
-- ネイティブ Ubuntu（20.04 / 22.04 / 24.04 / 26.04 対応）
-- 26.04 の場合は自動的に codename をフォールバック
-
-**実行後:**
-- ターミナルを一度開き直す（docker グループの反映に必要）
-
----
-
-### 2. `ubuntu-clone.sh` — リポジトリ取得（Ubuntu）
-
-```bash
+# ② リポジトリ取得（初回は gh auth login の対話あり。ブラウザ認証が手軽）
 curl -fsSL https://raw.githubusercontent.com/kokekokko481576/Go2_deploy/main/scripts/ubuntu-clone.sh | bash
-```
 
-**何をするのか:**
-- GitHub CLI で `~/bridge/Go2_deploy/` に clone
-- SSH で submodule（`external/*`）を取得
-- `/dev/dri` 不在時に compose.override.yaml を自動生成
-
-**gh 認証:**
-- 初回実行時に `gh auth login` の対話あり
-- ブラウザ認証が手軽（SSH 鍵は自動生成・登録）
-
-**実行後:**
-- chapter1/ が未取得のまま → 正常（submodule は update=none）
-
----
-
-### 3. `first-run.sh` — 初回ビルド・起動・疎通チェック
-
-```bash
+# ③ 初回ビルド＋疎通確認（初回は 15〜40 分）
 cd ~/bridge/Go2_deploy && ./scripts/first-run.sh
 ```
 
-**何をするのか:**
-- docker/sim と docker/ の両イメージをビルド（初回は 15～40 分）
-- 起動して DDS 疎通を自動チェック
-- Gazebo 起動・ロボット登場・/robot1/* トピック確認
+`first-run.sh` が以下を表示すれば成功。以降は日常起動の `dev-up.sh` を使う。
 
-**期待される出力:**
-- `[OK] simコンテナから go2が上がってきた`
-- `[OK] devコンテナから /robot1/* トピックが見える`
-- `[OK] 実データ(odometry)がdev側に届いている`
+```
+[OK] simコンテナから go2 が上がってきた
+[OK] devコンテナから /robot1/* トピックが見える
+[OK] 実データ(odometry)が dev 側に届いている
+```
 
-**2 回目以降:**
-- キャッシュが効くので高速（ビルドスキップ）
-- 起動のみ実行される
+### Windows (WSL2)
+
+| 順 | スクリプト | 実行場所 |
+|---|---|---|
+| ① | `windows-setup.ps1` | Windows(PowerShell)。WSL2導入・GPU確認、再起動 |
+| ② | `wsl2-setup.sh` | WSL2内。gh CLI・Docker導入。実行後ターミナル開き直し |
+| ③ | `first-run.sh` | WSL2内。初回ビルド＋疎通確認 |
+
+```powershell
+# ① Windows 側（PowerShell）
+irm https://raw.githubusercontent.com/kokekokko481576/Go2_deploy/main/scripts/windows-setup.ps1 | iex
+```
+```bash
+# ② WSL2 内
+curl -fsSL https://raw.githubusercontent.com/kokekokko481576/Go2_deploy/main/scripts/wsl2-setup.sh | bash
+```
+
+> **first-run.sh と dev-up.sh の違い**：`first-run.sh` は「初回ビルド＋疎通確認」専用（初回1回）。日常の起動は `dev-up.sh`。
 
 ---
 
-## 🧪 定量計測（Issue #36: GATE1）
+## GATE1 定量計測
 
-GATE1（三者合流：自己位置推定 + 経路生成 + 経路追従）の定量ベースライン化のためのスクリプト。
+GATE1（自己位置推定＋経路生成＋経路追従の合流）の到達精度を定量化する（Issue #36）。
 
-### 準備
+計測系スクリプト（`send_goal.sh` / `gate1_measure.sh` / `gate1_analyze.py`）は `ros2` を呼ぶため、
+**dev コンテナ内**（`ros2_ws/src/go2_path_following/scripts/`）に置いてある。
 
-```bash
-# Terminal 1: simコンテナ起動（Nav2干渉排除）
-cd ~/bridge/Go2_deploy/docker/sim
-SIM_ENABLE_NAV2=false docker compose up -d
-
-# Terminal 2: devコンテナ起動
-cd ~/bridge/Go2_deploy/docker
-docker compose up -d
-
-# Terminal 3: 自作EKF/AMCL + controller_server + planner起動
-# 詳細: ros2_ws/src/go2_path_following/README.md「使い方(フェーズB)」参照
-ros2 launch go2_localization localization.launch.py
-ros2 launch go2_path_following controller.launch.py
-ros2 run go2_path_following plan_follower
-ros2 run straight_line_planner straight_line_planner_node --ros-args -p use_sim_time:=true -r /tf:=/go2_localization/tf
-ros2 run cmd_vel_safety cmd_vel_safety_node --ros-args -r cmd_vel:=/robot1/cmd_vel
-```
-
-### `send_goal.sh` — ゴール投入
+### 手順
 
 ```bash
-./scripts/send_goal.sh [x] [y] [yaw(度)]
+# 1) GATE1計測モードで起動(sim の upstream Nav2 を止め、自作スタックだけで駆動)
+./scripts/dev-up.sh --gate1
+
+# 2) 別ターミナルでコンテナに入り、計測を回す
+docker exec -it arbeit-ros2 zsh
+cd ~/ros2_ws/src/go2_path_following/scripts
+./gate1_measure.sh 50                       # 50試行
+./gate1_analyze.py /tmp/gate1_results_...    # 解析
 ```
-
-**使い方:**
-
-```bash
-./scripts/send_goal.sh 3.0 0.0      # 3m前方へ、0°向き
-./scripts/send_goal.sh 2.0 1.5 90   # (2, 1.5)へ、90°左向きに正対
-```
-
-**内部処理:**
-- 度をラジアンに変換
-- クォータニオン（z軸回転）を計算
-- PoseStamped を `/goal_pose` に publish
-
-**デフォルト:**
-- 引数省略時は `3.0 0.0 0°` でゴール投入
-
----
 
 ### `gate1_measure.sh` — 計測自動化
 
 ```bash
-./scripts/gate1_measure.sh [trials]
+./gate1_measure.sh [trials]   # 省略時 50 試行（dev コンテナ内で実行）
 ```
 
-**使い方:**
-
-```bash
-./scripts/gate1_measure.sh 50        # 50 試行
-./scripts/gate1_measure.sh           # デフォルト50試行
-```
-
-**実施内容:**
-1. ランダムゴール生成（x: 1～3m, y: -1～1m, yaw: 0～360°）
-2. ゴール投入（`send_goal.sh` 呼び出し）
-3. 到達待機（12 秒）
-4. 最終姿勢・タイムスタンプをログに記録
-5. 繰り返す
-
-**出力:**
-```
-=== GATE1 Quantification: 50 trials ===
-Results directory: /tmp/gate1_results_20260724_151200
-[  1/50] Goal=( 1.50,  0.30, 120.0°) LOGGED
-[  2/50] Goal=( 2.80, -0.60,  45.3°) LOGGED
-...
-=== Summary ===
-Results saved to: /tmp/gate1_results_20260724_151200
-Logs: 50 files
-```
-
-**ログフォーマット:**
-```
-trial: 1
-goal: {x: 1.50, y: 0.30, yaw: 120.0}
-timestamp: 2026-07-24T15:12:00+09:00
-```
-
----
+ランダムゴール生成（x:1〜3m, y:-1〜1m, yaw:0〜360°）→ 投入（同ディレクトリの `send_goal.sh`）→
+到達待機 → ログ記録、を繰り返す。結果は `/tmp/gate1_results_<日時>/` に試行ごとの `.log` として保存。
 
 ### `gate1_analyze.py` — 統計解析
 
 ```bash
-./scripts/gate1_analyze.py <results_directory>
+./gate1_analyze.py /tmp/gate1_results_20260724_151200   # dev コンテナ内で実行
 ```
 
-**使い方:**
+現状はログ数・サンプル表示・レポート生成。今後 xy/yaw 誤差分布・成功率・CSV/グラフ出力へ拡張予定。
+
+---
+
+## ゴール投入 `send_goal.sh`
+
+`/goal_pose` に PoseStamped を publish する（YAML手打ちのミス防止）。`ros2` を呼ぶので
+**dev コンテナ内**で実行する（`ros2_ws/src/go2_path_following/scripts/send_goal.sh`）。
 
 ```bash
-./scripts/gate1_analyze.py /tmp/gate1_results_20260724_151200
+docker exec -it arbeit-ros2 zsh
+~/ros2_ws/src/go2_path_following/scripts/send_goal.sh [x] [y] [yaw(度)]
+
+~/ros2_ws/src/go2_path_following/scripts/send_goal.sh 3.0 0.0      # 3m 前方へ、0°
+~/ros2_ws/src/go2_path_following/scripts/send_goal.sh 2.0 1.5 90   # (2,1.5) へ、90°左向きに正対
 ```
 
-**出力:**
-- ログファイル数（試行数）
-- サンプル 3 件の内容表示
-- レポート生成
-
-**今後の拡張（詳細計測対応時）:**
-- xy 誤差の分布（平均・標準偏差）
-- yaw 誤差の分布
-- 成功率計算
-- CSV 出力
-- グラフ生成
+度→ラジアン変換とクォータニオン計算を内部で行う。引数省略時は `3.0 0.0 0°`。
 
 ---
 
-## 💻 Windows 向けセットアップ
+## スクリプト一覧
 
-### `windows-setup.ps1` — Windows 準備
+**ホスト側**（repo直下 `scripts/`。docker を外から操作する）
 
-```powershell
-irm https://raw.githubusercontent.com/kokekokko481576/Go2_deploy/main/scripts/windows-setup.ps1 | iex
-```
+| スクリプト | 用途 |
+|---|---|
+| `dev-up.sh` | **日常起動**（docker〜自作スタックを一発） |
+| `first-run.sh` | 初回ビルド＋起動＋DDS疎通チェック |
+| `ubuntu-setup.sh` / `ubuntu-clone.sh` | ネイティブUbuntu の初回セットアップ |
+| `windows-setup.ps1` / `wsl2-setup.sh` | Windows(WSL2) の初回セットアップ |
 
-**対象:** Windows 10 / 11 + WSL2
+**dev コンテナ内**（`ros2_ws/src/go2_path_following/scripts/`。`ros2` を呼ぶのでコンテナ内で実行）
 
-**何をするのか:**
-- WSL2 導入（初回）
-- Ubuntu イメージダウンロード
-- GPU ドライバチェック（AMD/NVIDIA）
-
-**実行後:**
-- 再起動 → Ubuntu ユーザ作成画面へ
-
----
-
-### `wsl2-setup.sh` — WSL2 内セットアップ
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/kokekokko481576/Go2_deploy/main/scripts/wsl2-setup.sh | bash
-```
-
-**対象:** WSL2 内の Ubuntu
-
-**何をするのか:**
-- Ubuntu 内に gh CLI・Docker Engine を導入
-- xhost ネイティブ WSL2 経由の設定
-
-**実行後:**
-- ターミナル開き直し → `cd ~/Go2_deploy && ./scripts/first-run.sh`
+| スクリプト | 用途 |
+|---|---|
+| `send_goal.sh` | ゴール1回投入 |
+| `gate1_measure.sh` / `gate1_analyze.py` | GATE1 計測・解析 |
 
 ---
 
-## 📋 スクリプトの使い分け
+## トラブルシュート
 
-| 環境 | 最初（1 回目） | 再起動後 | 日常実行 |
-|------|-------------|---------|--------|
-| **ネイティブ Ubuntu** | ① ubuntu-setup.sh<br>② ubuntu-clone.sh<br>③ first-run.sh | ③ first-run.sh | — |
-| **Windows WSL2** | windows-setup.ps1<br>（Windows 側）<br>wsl2-setup.sh<br>（WSL2 側）<br>first-run.sh | first-run.sh | — |
-| **計測（GATE1）** | 上記セットアップ完了後 | — | gate1_measure.sh<br>gate1_analyze.py<br>send_goal.sh |
+| 症状 | 対処 |
+|---|---|
+| `docker compose up` が `error gathering device` で失敗 | `/dev/dri` 無し環境。`compose.override.yaml.example` を `.yaml` にコピーして GPU 無効化 |
+| `ubuntu-setup.sh` 後も docker が使えない | ターミナルを開き直す（docker グループ反映）。即席なら `newgrp docker` |
+| Gazebo が真っ黒／激重 | GPU ソフトレンダリング。動作はするので先へ進んでよい |
+| gh 認証エラー | `gh auth logout` → `ubuntu-setup.sh`/`ubuntu-clone.sh` 再実行。SSH鍵の GitHub 登録を確認 |
+| ゴールを投げてもロボットが動かない | `ros2 topic echo /plan --qos-durability transient_local --once` で経路が出ているか確認（詳細は `ros2_ws/src/go2_path_following/README.md`） |
 
----
-
-## 🔧 トラブルシュート
-
-### Q: `docker compose up` が `error gathering device` で失敗する
-
-**A:** `/dev/dri` が無い環境。`compose.override.yaml.example` を `compose.override.yaml` にコピーして GPU 無効化。
-
+GPU無し環境の override:
 ```bash
 cp docker/compose.override.yaml.example docker/compose.override.yaml
 cp docker/sim/compose.override.yaml.example docker/sim/compose.override.yaml
 ```
 
-### Q: `ubuntu-setup.sh` 後も docker が使えない
-
-**A:** ターミナルを開き直す（docker グループ反映）。即席で試すなら `newgrp docker`。
-
-### Q: Gazebo が真っ黒 / 激重
-
-**A:** GPU ソフトレンダリング（mesa）。動作はするので先へ進んでよい。詳細は `docs/手順/Windows-WSL2セットアップ.md` トラブルシュート参照。
-
-### Q: gh 認証エラー
-
-**A:** `gh auth logout` → `ubuntu-setup.sh` と `ubuntu-clone.sh` を再実行。SSH 鍵が GitHub に登録されているか確認。
-
 ---
 
-## 📚 関連ドキュメント
+## 関連ドキュメント
 
 - `docs/手順/Ubuntuセットアップ.md` — 詳細手順・トラブルシュート
 - `docs/手順/Windows-WSL2セットアップ.md` — Windows 向け詳細
 - `docs/手順/デュアルブート構築.md` — Ubuntu デュアルブート構築
+- `ros2_ws/src/go2_path_following/README.md` — 経路追従の使い方・詳細
 - `ONBOARDING.md` — 快速スタートガイド
 
 ---
 
-**最後更新:** 2026-07-24
-**関連 Issue:** #28/#29/#30/#36/#40
+**関連 Issue:** #28/#29/#30/#36/#40/#41/#42
