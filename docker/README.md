@@ -26,6 +26,11 @@ Windows(WSL2) 列は #28 のスクリプト整備までは完了し、**実 Wind
 
 ## 使い方
 
+> 初めての人（Docker未導入・リポジトリ未取得）は、まず OS 別のセットアップ手順から:
+> ネイティブUbuntu(26.04含む) → [`docs/手順/Ubuntuセットアップ.md`](../docs/手順/Ubuntuセットアップ.md)、
+> Windows → [`docs/手順/Windows-WSL2セットアップ.md`](../docs/手順/Windows-WSL2セットアップ.md)。
+> 以下は Docker 導入済みの人向け。
+
 ```bash
 # 初回: イメージのビルド（数GBダウンロード、10〜20分）
 cd docker
