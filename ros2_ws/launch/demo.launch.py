@@ -33,7 +33,9 @@ from launch_ros.actions import Node
 
 # フェーズB: 経路生成・controller とも自作TFを参照する。素の /tf には誰も配信しないため必須。
 LOCALIZATION_TF = '/go2_localization/tf'
+# TF参照や sim時刻同期が要るノードだけ True。それ以外は /clock 購読コスト(#44)を避けて False。
 SIM_TIME = {'use_sim_time': True}
+NO_SIM_TIME = {'use_sim_time': False}
 
 
 def generate_launch_description():
@@ -69,22 +71,23 @@ def generate_launch_description():
         condition=IfCondition(use_following),
     )
 
-    # --- 橋渡し: /plan を FollowPath ゴールへ。controller_server とセットの付属品(常時起動) ---
+    # --- 橋渡し: /plan を FollowPath ゴールへ。タイマ/TF不使用なので sim時刻不要(#44) ---
     plan_follower = Node(
         package='go2_path_following',
         executable='plan_follower',
         name='plan_follower',
         output='screen',
-        parameters=[SIM_TIME],
+        parameters=[NO_SIM_TIME],
     )
 
-    # --- 安全弁: /cmd_vel_raw をクランプ+ウォッチドッグして /robot1/cmd_vel へ中継(常時起動) ---
+    # --- 安全弁: /cmd_vel_raw をクランプ+ウォッチドッグして /robot1/cmd_vel へ中継 ---
+    #     ウォッチドッグの途絶検知は壁時計の方が安全側。sim時刻不要(#44)。
     cmd_vel_safety = Node(
         package='cmd_vel_safety',
         executable='cmd_vel_safety_node',
         name='cmd_vel_safety_node',
         output='screen',
-        parameters=[SIM_TIME],
+        parameters=[NO_SIM_TIME],
         remappings=[('cmd_vel', '/robot1/cmd_vel')],
     )
 
