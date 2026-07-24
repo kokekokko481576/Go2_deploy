@@ -15,6 +15,7 @@ DEV_CONTAINER=arbeit-ros2
 DEMO_LAUNCH='~/ros2_ws/launch/demo.launch.py'   # コンテナ内パス(ros2_ws はマウント済み)
 
 GATE1=0
+SIM_NAV2=0        # 既定: sim 付属の upstream Nav2 は起動しない(自作スタックと冗長で重い)
 DO_BUILD=1
 
 show_help() {
@@ -23,8 +24,13 @@ show_help() {
 
   docker(sim/dev) の起動 → colcon build → 対話で選んだ自作スタックを前景起動。
 
+  sim は既定で「本家(upstream)Nav2 なし」で起動する。本プロジェクトは自作の
+  自己位置推定/経路追従を動かすため本家Nav2は冗長で重く、/robot1/cmd_vel の
+  二重publisher原因にもなるため(#35)。
+
 オプション:
-  --gate1     GATE1計測モード。sim 付属の upstream Nav2 を止める(自作スタックだけで駆動)。
+  --sim-nav2  sim を本家 Nav2 付きで起動する(#5 の本家スタック比較用。重い)。
+  --gate1     GATE1計測モード。本家Nav2に加え sim 側 RViz も止める(最軽量・自作スタックだけで駆動)。
   --no-build  colcon build を飛ばす(直前のビルドをそのまま使う)。
   -h, --help  このヘルプ。
 
@@ -39,12 +45,22 @@ HELP
 
 for arg in "$@"; do
     case "$arg" in
+        --sim-nav2) SIM_NAV2=1 ;;
         --gate1) GATE1=1 ;;
         --no-build) DO_BUILD=0 ;;
         -h|--help) show_help; exit 0 ;;
         *) echo "不明なオプション: $arg"; echo; show_help; exit 1 ;;
     esac
 done
+
+if [ "$GATE1" = 1 ] && [ "$SIM_NAV2" = 1 ]; then
+    echo "[NG] --gate1 と --sim-nav2 は同時指定できません(計測は本家Nav2を止める前提)。"
+    exit 1
+fi
+
+# sim の launch 引数を決める(本家Nav2は既定オフ、RVizは既定オン。--gate1 で両方オフ)
+if [ "$SIM_NAV2" = 1 ]; then SIM_ENABLE_NAV2=true; else SIM_ENABLE_NAV2=false; fi
+if [ "$GATE1" = 1 ]; then SIM_ENABLE_RVIZ=false; else SIM_ENABLE_RVIZ=true; fi
 
 ask() {  # ask "質問" "既定(Y/N)"; 返り値: 0=はい 1=いいえ
     local q="$1" def="$2" ans
@@ -74,19 +90,14 @@ if ask "[2] 経路生成の見本(straight_line_planner)を起動する? [Y/n]:"
 if ask "[3] 経路追従(controller_server)を起動する? [Y/n]:" Y; then
     USE_FOLLOW=true; else USE_FOLLOW=false; fi
 echo "=========================================================="
-echo "  自己位置推定=$([ "$USE_LOC" = true ] && echo 実装済み || echo 自作) / 経路生成=$USE_PLANNER / 経路追従=$USE_FOLLOW / GATE1=$([ "$GATE1" = 1 ] && echo ON || echo OFF)"
+echo "  自己位置推定=$([ "$USE_LOC" = true ] && echo 実装済み || echo 自作) / 経路生成=$USE_PLANNER / 経路追従=$USE_FOLLOW"
+echo "  sim: 本家Nav2=$SIM_ENABLE_NAV2 / RViz=$SIM_ENABLE_RVIZ$([ "$GATE1" = 1 ] && echo ' (GATE1計測モード)')"
 echo ""
 
 # --- sim / dev コンテナ起動 ------------------------------------------------
 echo "=== 1/4 コンテナ起動 ==="
-if [ "$GATE1" = 1 ]; then
-    echo "  GATE1計測モード: sim を upstream Nav2 なしで起動します"
-    (cd docker/sim && SIM_ENABLE_NAV2=false SIM_ENABLE_RVIZ=false docker compose up -d) \
-        || { echo "[NG] sim 起動に失敗(/dev/dri 関連なら docker/sim/compose.override.yaml.example 参照)"; exit 1; }
-else
-    (cd docker/sim && docker compose up -d) \
-        || { echo "[NG] sim 起動に失敗(/dev/dri 関連なら docker/sim/compose.override.yaml.example 参照)"; exit 1; }
-fi
+(cd docker/sim && SIM_ENABLE_NAV2="$SIM_ENABLE_NAV2" SIM_ENABLE_RVIZ="$SIM_ENABLE_RVIZ" docker compose up -d) \
+    || { echo "[NG] sim 起動に失敗(/dev/dri 関連なら docker/sim/compose.override.yaml.example 参照)"; exit 1; }
 (cd docker && docker compose up -d) \
     || { echo "[NG] dev 起動に失敗(/dev/dri 関連なら docker/compose.override.yaml.example 参照)"; exit 1; }
 echo "  [OK] $SIM_CONTAINER / $DEV_CONTAINER を起動"

@@ -57,11 +57,20 @@ docker exec -it arbeit-ros2 zsh
 
 ### オプション
 
+sim は既定で **本家(upstream)Nav2 なし**で起動する（自作の自己位置推定/経路追従と冗長で重く、
+`/robot1/cmd_vel` の二重publisher原因にもなるため #35）。
+
 | フラグ | 意味 |
 |---|---|
-| `--gate1` | GATE1計測モード。sim 付属の upstream Nav2 を止め、自作スタックだけで駆動する |
+| `--sim-nav2` | sim を本家 Nav2 付きで起動（#5 の本家スタック比較用。重い） |
+| `--gate1` | GATE1計測モード。本家Nav2に加え sim 側 RViz も止める（最軽量・自作スタックだけで駆動） |
 | `--no-build` | `colcon build` を飛ばす（直前のビルドを使う） |
 | `-h`, `--help` | ヘルプ |
+
+> ⚠️ **重さについて**：go2 の Gazebo は四足の物理＋歩容＋描画だけで **約8〜9コア**を要求する
+> （実測。RVizやNav2を切ってもほとんど変わらない）。12コア機では sim 単体でほぼ8割を使うため、
+> **sim と自作スタックを同時に全部動かすと飽和して Gazebo がカクつく**。重いときは、いま作業中の
+> ノード以外を止める・不要な可視化を切るのが効く。詳細は #44。
 
 > **配線（参考）**：`/goal_pose → straight_line_planner(/plan) → plan_follower → controller_server(→/cmd_vel_raw) → cmd_vel_safety(→/robot1/cmd_vel) → ロボット`
 
