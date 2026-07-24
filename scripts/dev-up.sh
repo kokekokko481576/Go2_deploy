@@ -30,14 +30,15 @@ show_help() {
 
 オプション:
   --sim-nav2  sim を本家 Nav2 付きで起動する(#5 の本家スタック比較用。重い)。
-  --gate1     GATE1計測モード。本家Nav2に加え sim 側 RViz も止める(最軽量・自作スタックだけで駆動)。
+  --gate1     GATE1計測モード。本家Nav2オフに加え可視化(専用RViz)も止める(最軽量・自作スタックだけで駆動)。
   --no-build  colcon build を飛ばす(直前のビルドをそのまま使う)。
   -h, --help  このヘルプ。
 
 対話で聞くこと:
   1) 自己位置推定 … 実装済み(EKF/AMCL) か 自作(自分で /go2_localization/tf を出す)
-  2) 経路生成の見本(straight_line_planner)を起動するか
+  2) 経路生成 … 見本の直線(straight_line) / ダイクストラ(go2_path_planning) / なし
   3) 経路追従(controller_server)を起動するか
+  4) Gazebo GUI(3D窓)を出すか … 既定オフ(ヘッドレス)。重い時の固まり対策。可視化はRViz(#44)
   ※ plan_follower(橋渡し) と cmd_vel_safety(安全弁) は常時起動。
   ※ ゴール(/goal_pose)は自分で投げる(send_goal.sh)。
 HELP
@@ -58,9 +59,12 @@ if [ "$GATE1" = 1 ] && [ "$SIM_NAV2" = 1 ]; then
     exit 1
 fi
 
-# sim の launch 引数を決める(本家Nav2は既定オフ、RVizは既定オン。--gate1 で両方オフ)
+# sim 本家Nav2は既定オフ(--sim-nav2でON)。
 if [ "$SIM_NAV2" = 1 ]; then SIM_ENABLE_NAV2=true; else SIM_ENABLE_NAV2=false; fi
-if [ "$GATE1" = 1 ]; then SIM_ENABLE_RVIZ=false; else SIM_ENABLE_RVIZ=true; fi
+# 可視化は demo.launch.py の専用RViz(rviz/go2_demo.rviz)を使うため sim側RVizは常にオフ。
+# 骨/経路(/plan)/AMCL結果/地図を1画面に出す設定。--gate1(計測)では可視化もオフ。
+SIM_ENABLE_RVIZ=false
+if [ "$GATE1" = 1 ]; then USE_RVIZ=false; else USE_RVIZ=true; fi
 
 ask() {  # ask "質問" "既定(Y/N)"; 返り値: 0=はい 1=いいえ
     local q="$1" def="$2" ans
@@ -84,19 +88,38 @@ echo "    2) 自作 (起動しない。自分で /go2_localization/tf を出す)
 read -rp "選択 [1]: " loc_ans
 if [ "${loc_ans:-1}" = "2" ]; then USE_LOC=false; else USE_LOC=true; fi
 
-if ask "[2] 経路生成の見本(straight_line_planner)を起動する? [Y/n]:" Y; then
-    USE_PLANNER=true; else USE_PLANNER=false; fi
+echo "[2] 経路生成 (/plan の供給元)"
+echo "    1) 見本: 直線 (straight_line_planner)  ← 既定"
+echo "    2) ダイクストラ: NavFn曲線 (go2_path_planning。地図/自己位置推定が前提)"
+echo "    3) 起動しない (自作を別途)"
+read -rp "選択 [1]: " pl_ans
+case "${pl_ans:-1}" in
+    2) PLANNER=dijkstra ;;
+    3) PLANNER=none ;;
+    *) PLANNER=straight ;;
+esac
 
 if ask "[3] 経路追従(controller_server)を起動する? [Y/n]:" Y; then
     USE_FOLLOW=true; else USE_FOLLOW=false; fi
+
+# Gazebo GUI(3D窓)は iGPU描画で重く、自律スタック+RViz と同時だと固まりやすい(#44)。
+# 既定オフ(ヘッドレス)で可視化はRVizに寄せる。ロボットのメッシュや世界を見たい時だけ y。
+if [ "$USE_RVIZ" = false ]; then
+    SIM_GUI=false   # RViz無し(GATE1等)なら Gazebo GUI を出す意味は薄いが、既定オフで最軽量
+elif ask "[4] Gazebo GUI(3D窓)も出す? 重い/固まる時はn推奨(可視化はRViz) [y/N]:" N; then
+    SIM_GUI=true; else SIM_GUI=false; fi
+
 echo "=========================================================="
-echo "  自己位置推定=$([ "$USE_LOC" = true ] && echo 実装済み || echo 自作) / 経路生成=$USE_PLANNER / 経路追従=$USE_FOLLOW"
-echo "  sim: 本家Nav2=$SIM_ENABLE_NAV2 / RViz=$SIM_ENABLE_RVIZ$([ "$GATE1" = 1 ] && echo ' (GATE1計測モード)')"
+echo "  自己位置推定=$([ "$USE_LOC" = true ] && echo 実装済み || echo 自作) / 経路生成=$PLANNER / 経路追従=$USE_FOLLOW"
+if [ "$PLANNER" = dijkstra ] && [ "$USE_LOC" = false ]; then
+    echo "  ※ ダイクストラは地図(/go2_localization/map)とTFが要ります。自作localizationがそれらを出す前提です。"
+fi
+echo "  sim本家Nav2=$SIM_ENABLE_NAV2 / Gazebo GUI=$SIM_GUI / RViz(専用go2_demo.rviz)=$USE_RVIZ$([ "$GATE1" = 1 ] && echo ' (GATE1計測モード)')"
 echo ""
 
 # --- sim / dev コンテナ起動 ------------------------------------------------
 echo "=== 1/4 コンテナ起動 ==="
-(cd docker/sim && SIM_ENABLE_NAV2="$SIM_ENABLE_NAV2" SIM_ENABLE_RVIZ="$SIM_ENABLE_RVIZ" docker compose up -d) \
+(cd docker/sim && SIM_ENABLE_NAV2="$SIM_ENABLE_NAV2" SIM_ENABLE_RVIZ="$SIM_ENABLE_RVIZ" SIM_GUI="$SIM_GUI" docker compose up -d) \
     || { echo "[NG] sim 起動に失敗(/dev/dri 関連なら docker/sim/compose.override.yaml.example 参照)"; exit 1; }
 (cd docker && docker compose up -d) \
     || { echo "[NG] dev 起動に失敗(/dev/dri 関連なら docker/compose.override.yaml.example 参照)"; exit 1; }
@@ -135,16 +158,16 @@ echo ""
 echo "  ● ゴールを投げる(/goal_pose は自分で出してください):"
 echo "      ~/ros2_ws/src/go2_path_following/scripts/send_goal.sh 3.0 0.0      # 3m 前方へ"
 echo "      ~/ros2_ws/src/go2_path_following/scripts/send_goal.sh 2.0 1.5 90   # 斜め先で左向き"
-if [ "$USE_PLANNER" = false ]; then
+if [ "$PLANNER" = none ]; then
 echo ""
 echo "  ● 経路生成は起動していません。自分のプランナを別ターミナルで起動してください。"
-echo "    見本を出すだけなら(自作TFへの remap が必須):"
+echo "    見本(直線)を出すだけなら(自作TFへの remap が必須):"
 echo "      ros2 run straight_line_planner straight_line_planner_node \\"
 echo "        --ros-args -p use_sim_time:=true -r /tf:=/go2_localization/tf"
 fi
 echo "=========================================================="
 echo ""
 
-LAUNCH_ARGS="use_localization:=$USE_LOC use_planner:=$USE_PLANNER use_following:=$USE_FOLLOW"
+LAUNCH_ARGS="use_localization:=$USE_LOC planner:=$PLANNER use_following:=$USE_FOLLOW use_rviz:=$USE_RVIZ"
 exec docker exec -it "$DEV_CONTAINER" bash -c \
     "source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash && ros2 launch $DEMO_LAUNCH $LAUNCH_ARGS"

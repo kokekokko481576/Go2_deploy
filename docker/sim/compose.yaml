@@ -25,8 +25,10 @@ services:
     devices:
       - /dev/dri:/dev/dri
     # SIM_ENABLE_NAV2=false でupstream Nav2スタックを起動しない(GATE1計測用、Issue #35)。
-    # 例: SIM_ENABLE_NAV2=false SIM_ENABLE_RVIZ=false docker compose up -d
-    # 未指定なら従来どおり両方true。戻すときは普通に docker compose up -d (再作成される)
+    # SIM_GUI=false で Gazebo をヘッドレス(server only)起動しGUI窓の描画負荷を止める(#44。
+    #   自律スタック+RViz同時起動で重い時に、可視化をRViz一本に寄せる用途)。
+    # 例: SIM_ENABLE_NAV2=false SIM_GUI=false docker compose up -d
+    # 未指定なら従来どおり全て有効。戻すときは普通に docker compose up -d (再作成される)
     # 末尾のフィルタは、Humble(dev)⇔Jazzy(sim)混在で全ノードが出し続ける無害な
     # type hash警告(issue #7)を docker logs から間引くもの。実エラーはそのまま流れる。
     # launchは子ノードのstderrを自分のstdoutへ多重化するため 2>&1 でまとめて濾す
@@ -34,6 +36,7 @@ services:
       bash -c "source install/setup.bash &&
       ros2 launch gazebo_sim launch.py use_sim_time:=true
       enable_nav2:=${SIM_ENABLE_NAV2:-true} enable_rviz:=${SIM_ENABLE_RVIZ:-true}
+      gui:=${SIM_GUI:-true}
       2>&1 | grep --line-buffered -vE
       'Failed to parse type hash|sequence size exceeds remaining buffer'"
     # --- NVIDIA GPU機で使う場合(nvidia-container-toolkit導入後、上のdevices/commandは共存可) ---

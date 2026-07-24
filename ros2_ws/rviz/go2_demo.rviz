@@ -1,0 +1,117 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 164
+      Enabled: true
+      Name: Grid
+      Plane Cell Count: 20
+      Reference Frame: <Fixed Frame>
+      Value: true
+    # ロボット位置は base_link のフレーム軸1つだけ(全関節を出すと重い。#44)。
+    # メッシュ本体は go2_description が dev コンテナに無いため出さない。
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Frame Timeout: 15
+      Frames:
+        All Enabled: false
+        base_link:
+          Value: true
+      Marker Scale: 0.6
+      Name: TF (base_link)
+      Show Arrows: false
+      Show Axes: true
+      Show Names: false
+      Update Interval: 1
+      Value: true
+    - Class: rviz_default_plugins/LaserScan
+      Name: LaserScan
+      Enabled: true
+      Color: 255; 255; 0
+      Color Transformer: FlatColor
+      Size (m): 0.03
+      Style: Points
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+        Value: /robot1/scan
+      Value: true
+    - Alpha: 0.7
+      Class: rviz_default_plugins/Map
+      Color Scheme: map
+      Draw Behind: true
+      Enabled: true
+      Name: Map (localization)
+      Use Timestamp: false
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /go2_localization/map
+      Update Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /go2_localization/map_updates
+      Value: true
+    - Class: rviz_default_plugins/Path
+      Name: Plan (/plan)
+      Enabled: true
+      Color: 0; 255; 0
+      Line Style: Lines
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        Value: /plan
+      Value: true
+    - Class: rviz_default_plugins/PoseArray
+      Name: AMCL Particles
+      Enabled: false
+      Color: 0; 192; 255
+      Shape: Arrow (Flat)
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+        Value: /go2_localization/particlecloud
+      Value: false
+    - Class: rviz_default_plugins/PoseWithCovariance
+      Name: AMCL Pose
+      Enabled: true
+      Color: 255; 0; 0
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        Value: /go2_localization/amcl_pose
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: odom
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Value: /goal_pose
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 6
+      Name: Current View
+      Pitch: 0.6
+      Yaw: 0.8
