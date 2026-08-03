@@ -242,7 +242,8 @@ cafe ワールド（Gazebo）・フェーズB（自作TF）で確認:
 ## 動作確認結果（2026-08-03、Issue #18: obstacle_layer追加）
 
 cafe ワールド（Gazebo）で、**地図に無い実在の障害物**（cafeワールドのテーブル状の物体。
-静的地図上では自由空間扱い＝`map_val=254`）を使って確認:
+map.pgmの画素値では自由空間扱い。`OccupancyGrid`の値体系（自由空間=0/占有=100/未知=-1）とは
+別の話なので注意）を使って確認:
 
 - **マーキング確認**: 顎LiDARの実測（`/go2_localization/chin_lidar_scan`の非`inf`ヒットを
   角度・距離から世界座標に逆算した点、例: (0.60, -1.60)）と同じ位置の`/global_costmap/costmap`
