@@ -21,6 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-rmw-cyclonedds-cpp \
     ros-humble-rosidl-generator-dds-idl \
     ros-humble-rosbag2 \
+    ros-humble-rclpy \
+    ros-humble-geometry-msgs \
     libyaml-cpp-dev \
     python3-colcon-common-extensions \
     iproute2 \
@@ -52,6 +54,9 @@ RUN curl -sS https://starship.rs/install.sh | sh -s -- --yes
 #   example/src               : サンプルノード群(unitree_go/api/hgのみに依存。unitree_sdk2は不要)
 COPY external/unitree_ros2/cyclonedds_ws/src/unitree /root/ws/src/unitree
 COPY external/unitree_ros2/example/src /root/ws/src/unitree_ros2_example
+# cmd_vel(経路追従の安全フィルタ出力)をGo2工場出荷歩容のSport Mode API Move命令に変換する
+# 自作の中継ノード(unitree_apiに依存するためdriverイメージ側でビルドする。Issue #3関連)
+COPY docker/driver/bridge/ /root/ws/src/go2_sport_bridge
 
 WORKDIR /root/ws
 SHELL ["/bin/bash", "-c"]

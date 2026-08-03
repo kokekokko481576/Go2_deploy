@@ -9,6 +9,44 @@
 - `unitree_go` / `unitree_api` / `unitree_hg` メッセージ定義(Go2ファームとのDDS通信I/F)
 - unitree_ros2公式のサンプルノード群(`unitree_ros2_example`。go2_sport_client等)
 - CycloneDDS 0.10.x(apt版 `ros-humble-rmw-cyclonedds-cpp`)固定。NIC名は`GO2_NIC`環境変数で注入(イメージには焼かない、要件R2)
+- `go2_sport_bridge`(自作): `cmd_vel`(経路追従の安全フィルタ出力)を工場出荷状態の歩容
+  (Sport Mode API)のMove命令に変換して配信。Isaac Lab学習を使わず、devコンテナのテレオペ/Nav2の
+  `cmd_vel`だけで実機を歩かせたい場合の橋渡し(下記「cmd_vel→工場出荷歩容ブリッジ」参照)
+
+## cmd_vel→工場出荷歩容ブリッジ(`go2_sport_bridge`)
+
+Isaac Labでの学習済み歩容を使わず、Go2工場出荷状態の歩容(Sport Mode API)を
+ROS2の`cmd_vel`から直接動かすための最小構成。経路: `teleop_twist_keyboard`(dev)
+→`cmd_vel_raw`→`cmd_vel_safety`(dev、クランプ+ウォッチドッグ)→`cmd_vel`
+→(DDS、host network越し)→`go2_sport_bridge`(driver)→`/api/sport/request`(Move, api_id=1008)→実機。
+
+devとdriverはどちらも`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`・`ROS_DOMAIN_ID=0`・
+`network_mode: host`で揃えてあるため、`cmd_vel`はコンテナを跨いでそのまま届く
+(`cmd_vel_safety`の実績と同じ仕組み。ただしdev/driverは両方Humbleなので
+dev⇔sim(Jazzy)間で出ていたCycloneDDSのXTypes警告は出ない想定)。
+
+```bash
+# 1. driverコンテナ: 実機/ループバックに接続し、まず起立させる(工場出荷のStandUp)
+cd docker/driver && docker compose up -d
+docker compose exec driver ros2 run unitree_ros2_example go2_sport_client 4   # StandUp
+
+# 2. driverコンテナ: cmd_vel→Move変換ブリッジを起動
+docker compose exec driver ros2 run go2_sport_bridge cmd_vel_to_sport_node
+
+# 3. devコンテナ: 安全フィルタとテレオペを起動
+cd ../.. && cd docker && docker compose up -d
+docker compose exec ros2 ros2 run cmd_vel_safety cmd_vel_safety_node
+docker compose exec ros2 ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=cmd_vel_raw
+```
+
+`go2_sport_bridge`は`cmd_vel`を20Hz(既定)で`/api/sport/request`のMoveへ変換して配信し続け、
+0.5秒(既定)cmd_velが途絶えるとMove(0,0,0)にフォールバックするウォッチドッグを持つ
+(`cmd_vel_safety`のウォッチドッグと二重の安全策。ロジックは
+`docker/driver/bridge/go2_sport_bridge/cmd_vel_to_sport_node.py`参照)。
+
+ループバック(`GO2_NIC`未指定)での動作確認は済み(下記「動作確認結果」)。
+StandUp前にMoveを送っても効果が無い/意図しない挙動の可能性があるため、
+起立(`go2_sport_client 4`または`1`=BalanceStand)を先に必ず実行すること。
 
 ## 使い方
 
@@ -56,3 +94,19 @@ GO2_NIC=enp3s0 docker compose up -d
 
 - 実機Go2との有線LAN接続でのDDS通信(`GO2_NIC`に実NIC名を指定しての検証)
 - `unitree_ros2_example` の各サンプル(sport_client等)を実機相手に実行しての動作確認
+
+## `go2_sport_bridge` 動作確認結果(2026-08-03、開発PC: Ubuntu22.04、ループバック)
+
+- イメージビルド成功(`go2_sport_bridge`パッケージ追加。`ros2 pkg executables go2_sport_bridge`で
+  `cmd_vel_to_sport_node`を確認)
+- `ros2 topic pub /cmd_vel ... -r 20`で`linear.x=0.3, angular.z=0.2`を注入 →
+  `/api/sport/request`に`api_id=1008`・`parameter={"x": 0.3, "y": 0.0, "z": 0.2}`が
+  配信されることを`ros2 topic echo`で確認
+- publishを止めてから0.5秒後、ウォッチドッグが作動し`parameter={"x": 0.0, "y": 0.0, "z": 0.0}`へ
+  自動で切り替わることを確認
+
+未実施(実機が必要なため):
+
+- 実機Go2への有線LAN接続でのMove配信・起立→歩行の実挙動確認(Issue #3)
+- devコンテナの`cmd_vel_safety`・`teleop_twist_keyboard`からのコンテナ跨ぎ結合(dev⇔driver。
+  dev⇔sim(Jazzy)での実績はあるが、dev⇔driver間では今回は未実施)

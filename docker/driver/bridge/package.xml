@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>go2_sport_bridge</name>
+  <version>0.1.0</version>
+  <description>
+    経路追従: cmd_vel(geometry_msgs/Twist)をGo2工場出荷状態の歩容(Sport Mode API)の
+    Move命令(unitree_api/Request, api_id=1008)へ変換し/api/sport/requestへ配信する中継ノード。
+    cmd_velが途絶えたら自動でMove(0,0,0)に切り替えるウォッチドッグ(既定0.5s)を持つ。
+  </description>
+  <maintainer email="koga_koichiro@naoe.eng.osaka-u.ac.jp">koga_koichiro</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>unitree_api</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
