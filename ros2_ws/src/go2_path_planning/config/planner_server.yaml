@@ -14,7 +14,8 @@
         allow_unknown: true
 
   # 生M2はstatic(既知地図)+inflationの2層(docs/計画/経路生成.md §3.3)。
-  # obstacle layer(顎LiDARのライブスキャン)は生M3(Issue #18)で追加する
+  # 生M3(Issue #18)でobstacle layer(顎LiDARのライブスキャン)を追加し、地図に無い
+  # 障害物も回避できるようにした
   global_costmap:
     global_costmap:
       ros__parameters:
@@ -28,13 +29,36 @@
         resolution: 0.05
         # footprintはgo2_path_followingのlocal_costmapと同じ共有定義(C5)
         footprint: "[ [0.35, 0.18], [0.35, -0.18], [-0.38, -0.18], [-0.38, 0.18] ]"
-        plugins: ["static_layer", "inflation_layer"]
+        plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
         static_layer:
           plugin: "nav2_costmap_2d::StaticLayer"
           # 自作map_server(go2_localizationが起動)の地図を購読する。
           # upstream(/robot1/...)とは分離した専用トピック
           map_topic: /go2_localization/map
           map_subscribe_transient_local: true
+        obstacle_layer:
+          plugin: "nav2_costmap_2d::ObstacleLayer"
+          enabled: true
+          # go2_localizationが自M2用に既に作っている顎LiDAR→2Dスキャン(base_link基準に
+          # 変換済み、range_min=0.4で脚の近距離ノイズは除去済み)をそのまま流用する。
+          # 新たな点群処理は不要(#18は主にcostmap設定の追加)
+          observation_sources: chin_lidar_scan
+          chin_lidar_scan:
+            topic: /go2_localization/chin_lidar_scan
+            sensor_frame: base_link
+            data_type: "LaserScan"
+            marking: true
+            clearing: true
+            obstacle_max_range: 10.0
+            # chin_lidar_scan側(pointcloud_to_laserscan)のrange_min=0.4に合わせる。
+            # 0.0のままだと将来range_minが変わった際に自己障害物マーキング/過剰クリアの
+            # 挙動が上流の設定と食い違う恐れがある
+            obstacle_min_range: 0.4
+            raytrace_max_range: 10.5
+            raytrace_min_range: 0.4
+            # pointcloud_to_laserscan側がuse_inf:trueで範囲外をinfにしているため、
+            # infを「そこまで障害物なし」の有効なクリア観測として使う
+            inf_is_valid: true
         inflation_layer:
           plugin: "nav2_costmap_2d::InflationLayer"
           cost_scaling_factor: 4.0
