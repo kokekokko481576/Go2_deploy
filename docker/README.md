@@ -97,6 +97,11 @@ compose.yaml の Ubuntu 設定がそのまま流用でき、`xhost` は通常不
   - Ubuntu: compose.yaml で有効化済み（確認済み）
   - macOS: Docker Desktop 4.34+ の "Enable host networking" を有効にする必要があり、制約が残る。
     実機接続は Linux 機（ネイティブ or Docker --net=host）を推奨
+- **複数NIC搭載機での注意**: 実機Go2と接続する際は、devコンテナにも`docker/driver`と同じ
+  `GO2_NIC`環境変数（例: `GO2_NIC=enp3s0 docker compose up -d`）を指定すること。
+  未指定のままだとCycloneDDSがdev/driver各コンテナで別々のNICを自動選択し、
+  コンテナを跨いだトピック（`cmd_vel`等）が互いに発見できないことを確認済み
+  （詳細・検証結果は`docs/手順/実機Go2接続チェックリスト.md`参照）
 
 ## 含まれる主なパッケージと計画書の対応
 

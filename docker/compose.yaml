@@ -20,6 +20,12 @@ services:
       - QT_X11_NO_MITSHM=1
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - ROS_DOMAIN_ID=0
+      # 実機Go2と接続する場合、driver側のGO2_NICと同じNIC名を指定する(例: enp3s0)。
+      # 未指定ならCycloneDDSの既定インタフェース選択のまま(sim/loopbackでの現状動作を変えない)。
+      # driverコンテナ側の狙いと同じ理由(docker/driver/setup_dds.sh参照): 複数NIC搭載機で
+      # dev/driver各コンテナが別々のNICを自動選択し、DDS発見に失敗するのを防ぐため。
+      - GO2_NIC=${GO2_NIC:-}
+      - CYCLONEDDS_URI=${GO2_NIC:+<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="${GO2_NIC}" priority="default" multicast="default" /></Interfaces></General></Domain></CycloneDDS>}
     stdin_open: true
     tty: true
     command: zsh
