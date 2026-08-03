@@ -58,6 +58,16 @@ launchシーケンス(spawn含む)をやり直す必要がある。
   `launch.py`からパススルーできるようにした。compose.yamlの`SIM_ENABLE_NAV2`/`SIM_ENABLE_RVIZ`
   環境変数から渡せる(`SIM_ENABLE_NAV2=false docker compose up -d`)。使い方は
   `go2_path_following/README.md`「GATE1計測時のトピック確認」を参照
+- **cafeワールドの床の高さズレを修正(2026-08-03)**: `quadropted_controller`の歩容コードは
+  地面の高さを認識せず(胴体から足先までの相対IK固定、`default_height=0.25m`)、実際の地面が
+  z=0にある前提で作られている。一方cafeモデル本体の床(`main_floor`)は上面がz≈0.19にあり、
+  このズレのせいでロボットが常にカフェの床へ0.19m沈んだ状態に見えていた。`cafe.world`の
+  `cafe`インクルード一式(床・壁・テーブル・Apriltag)をまとめてz=-0.19下げ、床面をz=0に揃えて
+  解消。あわせて摩擦ゼロの`ground_plane`が沈める前の床と重なって着地時に滑る副作用が出たため
+  z=-1へ退避(カフェの床のフットプリント外に落ちた場合の受け皿としては残す)。
+  `robots.yaml`のspawn高さも0.8→0.46(脚が伸びきった状態で接地する高さぎりぎり)に下げ、
+  joint_group_controller有効化前の無制御な自由落下も最小化した(詳細は
+  [PR #1](https://github.com/kokekokko481576/go2_ros2_sim_py/pull/1))
 - **顎(chin)搭載3D LiDARを追加(2026-07-12)**: `go2_description/xacro/robot.xacro`に
   `chin_lidar_frame`リンク、`gazebo.xacro`に垂直スキャン付き`gpu_lidar`センサを追加し、
   `gazebo_multi_nav2_world.launch.py`のros_gz_bridgeに`PointCloud2`のブリッジ行を追加した。
