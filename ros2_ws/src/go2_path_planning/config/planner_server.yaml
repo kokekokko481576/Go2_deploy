@@ -50,9 +50,12 @@
             marking: true
             clearing: true
             obstacle_max_range: 10.0
-            obstacle_min_range: 0.0
+            # chin_lidar_scan側(pointcloud_to_laserscan)のrange_min=0.4に合わせる。
+            # 0.0のままだと将来range_minが変わった際に自己障害物マーキング/過剰クリアの
+            # 挙動が上流の設定と食い違う恐れがある
+            obstacle_min_range: 0.4
             raytrace_max_range: 10.5
-            raytrace_min_range: 0.0
+            raytrace_min_range: 0.4
             # pointcloud_to_laserscan側がuse_inf:trueで範囲外をinfにしているため、
             # infを「そこまで障害物なし」の有効なクリア観測として使う
             inf_is_valid: true
