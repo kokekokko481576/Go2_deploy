@@ -1,9 +1,9 @@
 # go2_path_planning — 経路生成（Nav2 planner_server）
 
-経路生成サブシステム（生M2: コストマップ + グリッド探索、Issue #16/#17）の
-bringup パッケージ。自作ノードは `plan_requester`（小さな橋渡し）1つだけで、
-経路計画の本体は既製の Nav2 `planner_server`（NavFn=**ダイクストラ法**）を
-設定ファイル + 起動ファイルで駆動する構成。
+経路生成サブシステム（生M2: コストマップ + グリッド探索、Issue #16/#17。
+生M3: obstacle_layer追加、Issue #18）の bringup パッケージ。自作ノードは
+`plan_requester`（小さな橋渡し）1つだけで、経路計画の本体は既製の Nav2
+`planner_server`（NavFn=**ダイクストラ法**）を設定ファイル + 起動ファイルで駆動する構成。
 
 ---
 
@@ -157,7 +157,7 @@ plan_follower → controller_server(DWB) → cmd_vel_safety → /robot1/cmd_vel
 | `track_unknown_space` | `true` | 未知空間を区別して扱う |
 | `resolution` | `0.05` | セル解像度[m] |
 | `footprint` | `[[0.35,0.18],[0.35,-0.18],[-0.38,-0.18],[-0.38,0.18]]` | ロボット外形。`go2_path_following` の local_costmap と同じ共有定義（C5） |
-| `plugins` | `["static_layer", "inflation_layer"]` | 生M2 は 2 層構成（`docs/計画/経路生成.md` §3.3） |
+| `plugins` | `["static_layer", "obstacle_layer", "inflation_layer"]` | 生M2(static+inflation)に生M3(obstacle_layer)を追加した3層構成（`docs/計画/経路生成.md` §3.3） |
 | `always_send_full_costmap` | `true` | 差分ではなく全コストマップを配信 |
 
 **static_layer**（既知地図）
@@ -166,13 +166,30 @@ plan_follower → controller_server(DWB) → cmd_vel_safety → /robot1/cmd_vel
   地図を購読。upstream（`/robot1/...`）とは分離した専用トピック
 - `map_subscribe_transient_local`: `true`
 
+**obstacle_layer**（顎LiDARのライブスキャン、生M3・Issue #18）
+- `plugin`: `nav2_costmap_2d::ObstacleLayer`
+- `observation_sources`: `chin_lidar_scan` — `go2_localization`が自M2用に既に作っている
+  顎LiDAR→2Dスキャン（`/go2_localization/chin_lidar_scan`、`pointcloud_to_laserscan`の出力、
+  `base_link`基準に変換済み・脚の近距離ノイズはrange_min=0.4で除去済み）をそのまま流用する。
+  新たな点群処理は追加していない
+- `data_type: "LaserScan"` / `marking: true` / `clearing: true` — マーク（障害物を立てる）・
+  レイトレースクリア（光線が通った空間の障害物マークを消す）を両方行う
+- `obstacle_max_range: 10.0` / `raytrace_max_range: 10.5` — この距離まではマーク・クリア対象
+- `inf_is_valid: true` — 上流の`pointcloud_to_laserscan`が`use_inf: true`(範囲内に何もなければ
+  `inf`を返す)ため、`inf`を「そこまで障害物なし」の有効なクリア観測として扱う設定が必要
+  （`false`だと`inf`の観測が丸ごと捨てられ、見えているはずの自由空間がクリアされない）
+
 **inflation_layer**（膨張）
 - `plugin`: `nav2_costmap_2d::InflationLayer`
 - `cost_scaling_factor`: `4.0` — 障害物からの距離に対するコスト減衰率
 - `inflation_radius`: `0.45` — 膨張半径[m]
 
-> obstacle layer（顎LiDARのライブスキャン）は生M3（Issue #18）で追加する予定。
-> 現状の 2 層では動的障害物・未知障害物は避けられない。
+> 地図にある既知障害物はstatic_layer、地図に無い障害物（顎LiDARが今見ているもの）は
+> obstacle_layerがそれぞれ担当し、両方の上にinflation_layerが安全マージンを掛ける。
+> 再計画のトリガ設計（経路無効化時のみ・1Hz上限）はまだ実装していない（下記「未実施」参照）。
+> 現状は`plan_requester`が新しい`goal_pose`を受け取った時点のコストマップで計画するだけなので、
+> 「ゴールを投入した時点で既に見えている障害物」は避けられるが、「Path追従中に新たに
+> 出現した障害物」に対する自動再計画はまだ無い。
 
 #### lifecycle_manager_planning
 
@@ -222,6 +239,24 @@ cafe ワールド（Gazebo）・フェーズB（自作TF）で確認:
   そのままフルチェーン（plan_follower → DWB → cmd_vel_safety）でロボットが実際に
   迂回歩行し `Reached the goal!`（最終誤差約 0.18m、トレランス 0.25m 内）を確認。
 
+## 動作確認結果（2026-08-03、Issue #18: obstacle_layer追加）
+
+cafe ワールド（Gazebo）で、**地図に無い実在の障害物**（cafeワールドのテーブル状の物体。
+静的地図上では自由空間扱い＝`map_val=254`）を使って確認:
+
+- **マーキング確認**: 顎LiDARの実測（`/go2_localization/chin_lidar_scan`の非`inf`ヒットを
+  角度・距離から世界座標に逆算した点、例: (0.60, -1.60)）と同じ位置の`/global_costmap/costmap`
+  セルが`cost=100`（レシアル障害物）・周辺セルが`cost=99`（膨張域）になっていることを確認。
+  地図には存在しない障害物が、ライブスキャンだけでコストマップに立っていることが分かる
+- **迂回確認**: 上記障害物の近くを直線が通過するゴール(0.6, -2.5)に対し、
+  経路長 2.76m vs 直線 2.57m（+0.19m）の**迂回経路**を生成。障害物のy範囲
+  （y≈-0.5〜-1.7付近）を大きく回り込んでから障害物を過ぎた後にゴール方向へ向かう
+  軌跡になっており、obstacle_layerが実際に効いていることを確認
+- 合成の箱（0.3〜0.5m角）をGazeboにspawnして正面1〜1.2mに置く方法も試したが、顎LiDARの
+  下向き20°固定チルト+16ch(±15°)という粗い垂直分解能では、狭い物体だと都合よく
+  ビームが当たらず`inf`のまま検出できないことがある(この環境の顎LiDAR自体の特性。
+  自M2側の既知の課題でもある)。実在の大きな障害物（テーブル等）なら安定して検出できた
+
 ---
 
 ## 詰まりどころ（既知）
@@ -241,6 +276,13 @@ cafe ワールド（Gazebo）・フェーズB（自作TF）で確認:
 ## 未実施
 
 - MPPI/Smac 系との比較（まずは NavFn ダイクストラを既定とする）。
-- obstacle layer 追加（生M3、Issue #18）・再計画のトリガ設計（経路無効化時）。
+- **再計画のトリガ設計**（経路無効化時のみ・1Hz上限、Issue #18の残り）。現状は
+  新しい`goal_pose`受信時にしか計画しないため、Path追従中に新たに現れた障害物には
+  対応できない。`/global_costmap/costmap`(`OccupancyGrid`)を購読して現在のPathが
+  無効化されたかを判定し、無効化時のみ（かつ1Hz上限で）`plan_requester`から
+  再計画を要求する仕組みが必要。継続的な低頻度ポーリングは`plan_follower`が
+  Pathを受け取るたびにFollowPathゴールを再送する仕様（キャンセル→送り直し）のため、
+  無闇に高頻度で再計画すると経路追従がその都度中断されてしまう点に注意
+  （`go2_path_following/README.md`「plan_followerの内部ロジック」参照）
 - 経路品質の定量評価（障害物配置を変えた成功率・経路長・計画時間）。生M2 完了条件
   の「シミュレーション → 実機」の実機側も未実施。
