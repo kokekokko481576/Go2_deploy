@@ -78,6 +78,9 @@ class Gate1Measure(Node):
         self._latest_gt_pose = (
             msg.pose.position.x, msg.pose.position.y, quat_to_yaw(q.z, q.w))
 
+    def has_ground_truth(self):
+        return self._latest_gt_pose is not None
+
     def send_goal(self, x, y, yaw_rad):
         qz, qw = yaw_to_quat_zw(yaw_rad)
         msg = PoseStamped()
@@ -156,8 +159,13 @@ def main():
                   'gt_xy_error_m', 'gt_yaw_error_deg', 'gt_success']
 
     node.get_logger().info(f'GATE1計測開始: {args.trials}試行, 結果={csv_path}')
-    rclpy.spin_once(node, timeout_sec=1.0)  # 真値publisherからの受信を少し待つ
-    if node._latest_gt_pose is None:
+    # 真値publisherからの受信を少し待つ(起動タイミングのズレによる誤警告を避けるため
+    # 1回きりではなく2秒間ポーリングする)
+    for _ in range(4):
+        if node.has_ground_truth():
+            break
+        rclpy.spin_once(node, timeout_sec=0.5)
+    if not node.has_ground_truth():
         node.get_logger().warn(
             '真値(/gz_ground_truth/pose)が来ていません。'
             'docker/sim/tools/start_ground_truth.shの起動を忘れていないか確認してください'
@@ -224,7 +232,13 @@ def main():
                     f'  -> {status} xy_err={xy_err:.3f}m '
                     f'yaw_err={math.degrees(yaw_err):.1f}deg ({elapsed:.1f}s){gt_note}')
             else:
-                node.get_logger().warn('  -> FAIL (TFが一度も取得できなかった)')
+                gt_note = ''
+                if gt_success is not None:
+                    gt_note = (
+                        f' (真値では xy_err={gt_xy_err:.3f}m yaw_err='
+                        f'{math.degrees(gt_yaw_err):.1f}deg gt_success={int(gt_success)})')
+                node.get_logger().warn(
+                    f'  -> FAIL (TFが一度も取得できなかった){gt_note}')
             success_count += int(success)
             if gt_success is not None:
                 gt_sample_count += 1
