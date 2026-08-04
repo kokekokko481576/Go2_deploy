@@ -22,7 +22,8 @@ geometry_msgs/msg/PoseStampedとして配信する。ros_gz_bridgeのPose_V→TF
 
 前提: 単一ロボット構成(`robots.yaml`でrobot2以降を有効化する等でエンティティ名が
 Gazeboにより自動リネームされる場合、`--entity-name`が一致しなくなり検知できない。
-その場合は`pose_stale_warn_sec`秒ごとに警告を出す)。
+その場合は`--stale-warn-sec`秒間未取得が続いた時点で1回だけ警告を出す。復帰すれば
+フラグが戻り、再度未取得が続けば再度1回警告する)。
 """
 import argparse
 import re
@@ -116,6 +117,10 @@ class GroundTruthPublisher(Node):
                 if not stack and token == 'pose':
                     # 新しいエンティティのpose {}ブロック開始
                     name, pos, orient = None, {}, {}
+                elif token == 'stamp':
+                    # nsec:0等がproto3のデフォルト値省略で出力されない場合に、前の
+                    # stampの値が引き継がれてsec/nsecが混ざるのを防ぐ
+                    entry = {}
                 stack.append(token)
                 continue
 
