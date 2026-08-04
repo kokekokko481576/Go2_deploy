@@ -11,6 +11,12 @@ SIM_ENABLE_NAV2=false で起動していること
 
 結果は scripts/results/gate1_<timestamp>.csv に1試行1行で書き出す。
 集計は gate1_analyze.py <csv> で行う。
+
+Issue #43(Gazebo真値ツール、sim限定)を`./docker/sim/tools/start_ground_truth.sh`で
+起動しておくと、到達判定に使うAMCL推定(map->base_link)と同時に真値
+(`/gz_ground_truth/pose`)も記録し、「推定では成功判定だが実際には未到達」という
+偽陽性(#14/#36で判明した接触時のオドメトリズレが原因)を検出できる。
+起動していなくても真値列は空のまま動作する(必須ではない)。
 """
 import argparse
 import csv
@@ -62,6 +68,18 @@ class Gate1Measure(Node):
         self._goal_pub = self.create_publisher(PoseStamped, '/goal_pose', 10)
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
+        # Issue #43: 起動していれば真値も併記する(未起動でも動作は変わらない)
+        self._latest_gt_pose = None
+        self.create_subscription(
+            PoseStamped, '/gz_ground_truth/pose', self._on_ground_truth, 10)
+
+    def _on_ground_truth(self, msg):
+        q = msg.pose.orientation
+        self._latest_gt_pose = (
+            msg.pose.position.x, msg.pose.position.y, quat_to_yaw(q.z, q.w))
+
+    def has_ground_truth(self):
+        return self._latest_gt_pose is not None
 
     def send_goal(self, x, y, yaw_rad):
         qz, qw = yaw_to_quat_zw(yaw_rad)
@@ -90,10 +108,13 @@ class Gate1Measure(Node):
     def wait_and_measure(self, goal_x, goal_y, goal_yaw, timeout_s):
         start = time.monotonic()
         last_pose = None
+        last_gt_pose = None
         consecutive_ok = 0
         while time.monotonic() - start < timeout_s:
             rclpy.spin_once(self, timeout_sec=POLL_PERIOD_S)
             pose = self.current_pose()
+            if self._latest_gt_pose is not None:
+                last_gt_pose = self._latest_gt_pose
             if pose is None:
                 continue
             last_pose = pose
@@ -102,16 +123,16 @@ class Gate1Measure(Node):
             if xy_err <= XY_TOLERANCE_M and yaw_err <= YAW_TOLERANCE_RAD:
                 consecutive_ok += 1
                 if consecutive_ok >= CONSECUTIVE_OK_REQUIRED:
-                    return True, pose, xy_err, yaw_err, time.monotonic() - start
+                    return True, pose, xy_err, yaw_err, time.monotonic() - start, last_gt_pose
             else:
                 consecutive_ok = 0
 
         elapsed = time.monotonic() - start
         if last_pose is None:
-            return False, None, None, None, elapsed
+            return False, None, None, None, elapsed, last_gt_pose
         xy_err = math.hypot(last_pose[0] - goal_x, last_pose[1] - goal_y)
         yaw_err = abs(angle_diff(last_pose[2], goal_yaw))
-        return False, last_pose, xy_err, yaw_err, elapsed
+        return False, last_pose, xy_err, yaw_err, elapsed, last_gt_pose
 
 
 def main():
@@ -133,11 +154,27 @@ def main():
 
     fieldnames = ['trial', 'goal_x', 'goal_y', 'goal_yaw_deg',
                   'final_x', 'final_y', 'final_yaw_deg',
-                  'xy_error_m', 'yaw_error_deg', 'success', 'elapsed_s']
+                  'xy_error_m', 'yaw_error_deg', 'success', 'elapsed_s',
+                  'gt_x', 'gt_y', 'gt_yaw_deg',
+                  'gt_xy_error_m', 'gt_yaw_error_deg', 'gt_success']
 
     node.get_logger().info(f'GATE1計測開始: {args.trials}試行, 結果={csv_path}')
+    # 真値publisherからの受信を少し待つ(起動タイミングのズレによる誤警告を避けるため
+    # 1回きりではなく2秒間ポーリングする)
+    for _ in range(4):
+        if node.has_ground_truth():
+            break
+        rclpy.spin_once(node, timeout_sec=0.5)
+    if not node.has_ground_truth():
+        node.get_logger().warn(
+            '真値(/gz_ground_truth/pose)が来ていません。'
+            'docker/sim/tools/start_ground_truth.shの起動を忘れていないか確認してください'
+            '(無くても計測自体は進みますが、偽陽性の検出ができません)')
 
     success_count = 0
+    gt_success_count = 0
+    gt_sample_count = 0
+    false_positive_count = 0
     with open(csv_path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -151,8 +188,15 @@ def main():
                 f'[{i}/{args.trials}] goal=({goal_x:.2f}, {goal_y:.2f}, {goal_yaw_deg:.1f}deg)')
             node.send_goal(goal_x, goal_y, goal_yaw)
 
-            success, pose, xy_err, yaw_err, elapsed = node.wait_and_measure(
+            success, pose, xy_err, yaw_err, elapsed, gt_pose = node.wait_and_measure(
                 goal_x, goal_y, goal_yaw, TRIAL_TIMEOUT_S)
+
+            gt_xy_err = gt_yaw_err = gt_success = None
+            if gt_pose is not None:
+                gt_xy_err = math.hypot(gt_pose[0] - goal_x, gt_pose[1] - goal_y)
+                gt_yaw_err = abs(angle_diff(gt_pose[2], goal_yaw))
+                gt_success = (gt_xy_err <= XY_TOLERANCE_M
+                              and gt_yaw_err <= YAW_TOLERANCE_RAD)
 
             row = {
                 'trial': i,
@@ -166,24 +210,55 @@ def main():
                 'yaw_error_deg': round(math.degrees(yaw_err), 1) if yaw_err is not None else '',
                 'success': int(success),
                 'elapsed_s': round(elapsed, 1),
+                'gt_x': round(gt_pose[0], 3) if gt_pose else '',
+                'gt_y': round(gt_pose[1], 3) if gt_pose else '',
+                'gt_yaw_deg': round(math.degrees(gt_pose[2]), 1) if gt_pose else '',
+                'gt_xy_error_m': round(gt_xy_err, 3) if gt_xy_err is not None else '',
+                'gt_yaw_error_deg':
+                    round(math.degrees(gt_yaw_err), 1) if gt_yaw_err is not None else '',
+                'gt_success': int(gt_success) if gt_success is not None else '',
             }
             writer.writerow(row)
             f.flush()
 
             if pose is not None:
                 status = 'OK' if success else 'FAIL'
+                gt_note = ''
+                if gt_success is not None and bool(gt_success) != bool(success):
+                    gt_note = (
+                        f' [偽陽性疑い: 推定={status}だが真値ではgt_xy_err='
+                        f'{gt_xy_err:.3f}m gt_yaw_err={math.degrees(gt_yaw_err):.1f}deg]')
                 node.get_logger().info(
                     f'  -> {status} xy_err={xy_err:.3f}m '
-                    f'yaw_err={math.degrees(yaw_err):.1f}deg ({elapsed:.1f}s)')
+                    f'yaw_err={math.degrees(yaw_err):.1f}deg ({elapsed:.1f}s){gt_note}')
             else:
-                node.get_logger().warn('  -> FAIL (TFが一度も取得できなかった)')
+                gt_note = ''
+                if gt_success is not None:
+                    gt_note = (
+                        f' (真値では xy_err={gt_xy_err:.3f}m yaw_err='
+                        f'{math.degrees(gt_yaw_err):.1f}deg gt_success={int(gt_success)})')
+                node.get_logger().warn(
+                    f'  -> FAIL (TFが一度も取得できなかった){gt_note}')
             success_count += int(success)
+            if gt_success is not None:
+                gt_sample_count += 1
+                gt_success_count += int(gt_success)
+                if bool(gt_success) != bool(success):
+                    false_positive_count += 1
 
             time.sleep(SETTLE_PAUSE_S)
 
     rate = 100.0 * success_count / args.trials if args.trials else 0.0
     node.get_logger().info(
-        f'=== 完了: {success_count}/{args.trials} 成功 ({rate:.1f}%) ===')
+        f'=== 完了: {success_count}/{args.trials} 成功 ({rate:.1f}%、推定ベース) ===')
+    if gt_sample_count > 0:
+        gt_rate = 100.0 * gt_success_count / gt_sample_count
+        node.get_logger().info(
+            f'    真値ベース: {gt_success_count}/{gt_sample_count} 成功 ({gt_rate:.1f}%)、'
+            f'推定と真値で判定が食い違った試行: {false_positive_count}件')
+    else:
+        node.get_logger().warn(
+            '    真値データが1件も取れませんでした(start_ground_truth.sh未起動?)')
     node.get_logger().info(f'結果: {csv_path}')
 
     node.destroy_node()

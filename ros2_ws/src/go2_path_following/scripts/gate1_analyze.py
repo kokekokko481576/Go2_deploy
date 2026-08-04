@@ -66,6 +66,26 @@ def main():
                   f' / 時点xy誤差: 平均{statistics.mean(xy_errs_fail):.3f}m'
                   f' / 最大{max(xy_errs_fail):.3f}m')
 
+    # Issue #43: 真値(gt_*列)があれば推定ベースとの食い違いを報告する
+    gt_rows = [r for r in rows if r.get('gt_success', '') != '']
+    if gt_rows:
+        gt_success_rows = [r for r in gt_rows if r['gt_success'] == '1']
+        mismatches = [r for r in gt_rows if r['gt_success'] != r['success']]
+        print(f'\n-- 真値(Gazebo物理)との比較({len(gt_rows)}/{total}試行で取得) --')
+        print(f'真値ベース到達成功率: {len(gt_success_rows)}/{len(gt_rows)} '
+              f'({100.0 * len(gt_success_rows) / len(gt_rows):.1f}%)')
+        if mismatches:
+            print(f'推定と真値で判定が食い違った試行: {len(mismatches)}件'
+                  '(推定=成功/真値=未到達 の偽陽性、またはその逆)')
+            for r in mismatches:
+                print(f"  trial {r['trial']}: 推定success={r['success']} "
+                      f"gt_success={r['gt_success']} "
+                      f"(gt_xy_err={r['gt_xy_error_m']}m, gt_yaw_err={r['gt_yaw_error_deg']}deg)")
+        else:
+            print('推定と真値の判定が食い違った試行: 0件')
+    else:
+        print('\n(真値データ無し。start_ground_truth.shを起動していない計測と思われます)')
+
 
 if __name__ == '__main__':
     main()
