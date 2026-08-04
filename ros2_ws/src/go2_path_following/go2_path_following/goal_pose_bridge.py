@@ -46,9 +46,14 @@ class GoalPoseBridge(Node):
             self.get_logger().warn('NavigateToPose goal rejected')
             return
         self._goal_handle = goal_handle
-        goal_handle.get_result_async().add_done_callback(self._on_result)
+        goal_handle.get_result_async().add_done_callback(
+            lambda future: self._on_result(future, goal_handle))
 
-    def _on_result(self, future):
+    def _on_result(self, future, goal_handle):
+        # 完了済みゴールのハンドルを残さない。次のgoal_poseで無駄なcancel_goal_asyncを
+        # 投げないため(すでに新しいゴールに差し替わっていたら何もしない)
+        if self._goal_handle is goal_handle:
+            self._goal_handle = None
         status = future.result().status
         self.get_logger().info(f'NavigateToPose finished (status={status})')
 
