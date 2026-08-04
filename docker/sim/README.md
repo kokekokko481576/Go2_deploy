@@ -9,6 +9,8 @@
 - Gazebo(Ignition/Gazebo Harmonic) 上で Go2 モデルを歩行・旋回させる(独自Python IK歩容)
 - Nav2フルスタック(planner/controller/behavior/smoother/bt_navigator)込みで起動
 - カメラ・IMU・2D LiDAR(`/robot1/scan`)がGazebo→ROS2ブリッジ経由で流れる
+- `tools/`(Issue #43): Gazebo物理演算の真値位置を取得できる(sim限定・自己位置推定とは
+  別トピック。詳細`tools/README.md`)
 
 ## 使い方
 
