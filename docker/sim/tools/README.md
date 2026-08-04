@@ -54,3 +54,11 @@ docker exec arbeit-ros2 bash -c "source /opt/ros/humble/setup.bash && source ~/r
 
 Pose更新は`/world/default/pose/info`の配信レートに追従するため約80〜90Hz出る
 (スロットリングはしていない。デバッグ用途で問題にならない範囲)。
+
+タイムスタンプは`Pose_V.header.stamp`(Gazeboのsim時刻)をそのまま使う(受信時のROS時刻
+ではない)。他のsim時刻同期ノードとの時刻ベース比較で誤差要因にしないため。
+
+**単一ロボット構成が前提**。`robots.yaml`でrobot2以降を有効化するなどでspawn時に
+`-allow_renaming true`が働きエンティティ名が変わった場合、`--entity-name`(既定
+`robot1_my_bot`)と一致せず**エラーも警告も出さず何も配信しなくなる**ことがある。
+これを検知するため、`--stale-warn-sec`(既定5秒)間pose未取得なら警告ログを出す。
