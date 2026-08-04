@@ -5,6 +5,11 @@
 その設定ファイル+起動ファイルで構成する。現在有効なローカルプランナは
 **DWB**(`dwb_core::DWBLocalPlanner`)で、MPPIとの比較(Issue #22)は未実施。
 
+追M3(Issue #23)で`plan_follower`にリカバリを追加した。FollowPathが
+`progress_checker`の停滞判定でABORTEDになった場合、その場回転→後退→
+最後の`goal_pose`を再publish(現在位置からの再計画を促す)を行う
+(`recovery_max_attempts`回失敗したら断念してログを出す)。
+
 ---
 
 ## 使い方(フェーズB、現在の既定)
@@ -374,7 +379,25 @@ cd ~/ros2_ws/src/go2_path_following/scripts
 「大きくズレた失敗」の原因切り分け(progress_checker停止後に本当に無反応になっているか)は
 今後の課題。生データは`scripts/results/gate1_20260803_060702.csv`。
 
+### ローカルコストマップ+リカバリ(Issue #23、2026-08-04)
+
+「大きくズレた失敗」(地図にない障害物に接触→無反応のままタイムアウト)への対策として:
+
+- `local_costmap`に`obstacle_layer`(顎LiDAR、globalと同じ観測源)を追加し、5m四方
+  ローリングに変更(#23本文どおり、既知地図の`static_layer`は持たずobstacle+inflationのみ)。
+  これでDWBの`BaseObstacle`critikが地図にない障害物にも反応できるようになった。
+- `plan_follower`にリカバリを追加(上記「概要」参照)。
+
+**Gazeboで動作確認済み**: `obstacle_layer`が`chin_lidar_scan`を購読して起動することを確認。
+家具にぶつかりやすい遠め・斜めのゴール(例: `send_goal.sh 5.0 2.5 90`)を投げ、
+`progress_checker`の停滞判定で実際に`FollowPath`が`ABORTED`になるケースを再現。
+`plan_follower`のログで「ABORTED→リカバリ試行1/3(回転→後退)→再計画要求」の一巡を確認し、
+その後の再追従でゴール近傍(xy誤差0.32m程度)まで到達して安定停止した。「共分散による
+減速スケーリング」は#23完了条件(地図にない障害物の回避+リカバリ動作)には含まれないため
+未実装のまま。
+
 ### 未実施 / 今後
 
 - MPPIとの比較(Issue #22)。現状のローカルプランナはDWBのみ。
-- ローカルコストマップでの障害物回避(Issue #23、追M3)。`static_layer`/`voxel_layer`の追加。
+- 共分散による減速スケーリング(Issue #23の付随項目、完了条件外のため後回し)。
+- 閉塞時のリカバリを繰り返しても解消しないケースの切り分け(`recovery_max_attempts`到達後の扱い)。

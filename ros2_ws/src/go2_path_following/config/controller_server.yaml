@@ -64,8 +64,10 @@
         RotateToGoal.slowing_factor: 5.0
         RotateToGoal.lookahead_time: -1.0
 
-  # M2(平地の経路追従)は障害物回避が完了条件に含まれない(計画書M3で扱う)ため、
-  # inflation_layerのみの最小構成にする。static_layer/voxel_layerは追M3(Issue #23)で追加
+  # 追M3(Issue #23): 地図にない障害物をローカルだけで回避するため、
+  # obstacle_layer(顎LiDAR)+inflation_layerの5m四方ローリングにする。
+  # 既知の地図情報は生M3(#18)のglobal_costmap(static_layer)側の役割なので、
+  # ここではstatic_layerを持たない(obstacle+inflationのみ、と#23本文で明記)
   local_costmap:
     local_costmap:
       ros__parameters:
@@ -75,11 +77,28 @@
         global_frame: odom
         robot_base_frame: base_link
         rolling_window: true
-        width: 10
-        height: 10
+        width: 5
+        height: 5
         resolution: 0.05
         footprint: "[ [0.35, 0.18], [0.35, -0.18], [-0.38, -0.18], [-0.38, 0.18] ]"
-        plugins: ["inflation_layer"]
+        plugins: ["obstacle_layer", "inflation_layer"]
+        obstacle_layer:
+          plugin: "nav2_costmap_2d::ObstacleLayer"
+          enabled: true
+          # global_costmap(go2_path_planning/config/planner_server.yaml)の
+          # obstacle_layerと同じ観測源・設定(#18で確定済みの値をそのまま流用)
+          observation_sources: chin_lidar_scan
+          chin_lidar_scan:
+            topic: /go2_localization/chin_lidar_scan
+            sensor_frame: base_link
+            data_type: "LaserScan"
+            marking: true
+            clearing: true
+            obstacle_max_range: 10.0
+            obstacle_min_range: 0.4
+            raytrace_max_range: 10.5
+            raytrace_min_range: 0.4
+            inf_is_valid: true
         inflation_layer:
           plugin: "nav2_costmap_2d::InflationLayer"
           cost_scaling_factor: 4.0
