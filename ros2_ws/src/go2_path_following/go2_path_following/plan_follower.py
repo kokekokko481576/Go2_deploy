@@ -19,6 +19,7 @@ from nav_msgs.msg import Path
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from std_msgs.msg import Bool
 
 
 class PlanFollower(Node):
@@ -40,13 +41,21 @@ class PlanFollower(Node):
         self.declare_parameter('recovery_cmd_rate', 10.0)
         # watchdog_timeout(cmd_vel_safety、既定0.5s)より十分短い周期で送り続ける必要がある
         self.declare_parameter('recovery_max_attempts', 3)
+        # 後退・再計画した直後にまた接触/ABORTEDが起きた場合、経路自体が障害物を貫通している
+        # 可能性が高い(直線プランナ等の障害物無視プランナで顕著)。この秒数以内の再発は
+        # 3回粘らず即断念する(無理に直進を繰り返してオドメトリを余計に滑らせないため)
+        self.declare_parameter('immediate_recollision_window', 5.0)
 
         self._spin_speed = self.get_parameter('recovery_spin_speed').value
         self._spin_duration = self.get_parameter('recovery_spin_duration').value
         self._backup_speed = self.get_parameter('recovery_backup_speed').value
         self._backup_duration = self.get_parameter('recovery_backup_duration').value
         self._max_attempts = self.get_parameter('recovery_max_attempts').value
+        self._immediate_recollision_window = self.get_parameter(
+            'immediate_recollision_window').value
         cmd_rate = self.get_parameter('recovery_cmd_rate').value
+        self._last_recovery_finish_time = None
+        self._gave_up = False
 
         self._action_client = ActionClient(self, FollowPath, 'follow_path')
         self._goal_handle = None
@@ -61,10 +70,13 @@ class PlanFollower(Node):
         self._recovery_elapsed = 0.0
         self._cmd_period = 1.0 / cmd_rate
 
+        self._collision_active = False
+
         self._cmd_pub = self.create_publisher(Twist, 'cmd_vel_raw', 10)
         self._goal_pub = self.create_publisher(PoseStamped, 'goal_pose', 10)
         self.create_subscription(Path, 'plan', self.on_plan, 10)
         self.create_subscription(PoseStamped, 'goal_pose', self._on_goal_pose, 10)
+        self.create_subscription(Bool, 'collision_detected', self._on_collision, 10)
 
     def _on_set_parameters(self, params):
         for param in params:
@@ -81,7 +93,9 @@ class PlanFollower(Node):
             # 維持する(ここで0に戻すとrecovery_max_attemptsが機能しなくなる)
             self._recovery_republish = False
         else:
+            # ユーザーが投入した新しいゴール。前のゴールで断念していても再挑戦させる
             self._recovery_attempts = 0
+            self._gave_up = False
 
     def on_plan(self, msg):
         if self._recovery_timer is not None:
@@ -131,10 +145,40 @@ class PlanFollower(Node):
         elif status == GoalStatus.STATUS_SUCCEEDED:
             self._recovery_attempts = 0
 
+    def _on_collision(self, msg):
+        # collision_detector(LiDAR近距離+IMU/オドメトリ不一致)からの即時通知。
+        # progress_checkerの10秒タイムアウトを待たず、その場でFollowPathを止めて
+        # リカバリを始める(滑る時間を減らすのが目的。#14で判明した接触時の
+        # オドメトリオーバーシュート対策)
+        if msg.data and not self._collision_active and self._recovery_timer is None:
+            self.get_logger().warn('接触検知(LiDAR/IMU)。即時リカバリを開始します')
+            if self._goal_handle is not None:
+                self._goal_handle.cancel_goal_async()
+                self._goal_handle = None
+            self._start_recovery()
+        self._collision_active = msg.data
+
     def _start_recovery(self):
         if self._last_goal_pose is None:
             self.get_logger().warn('リカバリ対象のgoal_poseが無いため中断')
             return
+        if self._gave_up:
+            return
+
+        now = self.get_clock().now()
+        if self._last_recovery_finish_time is not None:
+            elapsed = (now - self._last_recovery_finish_time).nanoseconds / 1e9
+            if elapsed < self._immediate_recollision_window:
+                self.get_logger().error(
+                    f'後退・再計画から{elapsed:.1f}秒で再び接触/ABORTEDが発生しました。'
+                    '経路自体が障害物を貫通している可能性が高く、このリカバリでは'
+                    '解決できないため断念します(障害物を考慮するプランナ(dijkstra等)への'
+                    '切替を検討してください。新しいgoal_poseが来れば再挑戦します)')
+                self._gave_up = True
+                self._cancel_recovery()
+                self._cmd_pub.publish(Twist())
+                return
+
         self._recovery_attempts += 1
         if self._recovery_attempts > self._max_attempts:
             self.get_logger().error(
@@ -171,6 +215,7 @@ class PlanFollower(Node):
     def _finish_recovery(self):
         self._cancel_recovery()
         self._cmd_pub.publish(Twist())  # 明示的に停止
+        self._last_recovery_finish_time = self.get_clock().now()
         self.get_logger().info('リカバリ完了。最後のgoal_poseを再publishして再計画を要求します')
         self._recovery_republish = True
         self._goal_pub.publish(self._last_goal_pose)

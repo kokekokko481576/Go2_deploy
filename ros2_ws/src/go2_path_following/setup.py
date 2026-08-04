@@ -28,6 +28,7 @@ setup(
     entry_points={
         'console_scripts': [
             'plan_follower = go2_path_following.plan_follower:main',
+            'collision_detector = go2_path_following.collision_detector:main',
         ],
     },
 )

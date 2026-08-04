@@ -107,6 +107,17 @@ def generate_launch_description():
         parameters=[NO_SIM_TIME, {'controller_id': controller_id}],
     )
 
+    # --- 接触検知(#23派生): LiDAR近距離+IMU/オドメトリ不一致でcollision_detectedを
+    #     発行し、plan_followerがprogress_checkerの10秒待ちより速くリカバリを始める ---
+    #     IMU積分・LiDARタイミングはsim時刻に同期させる必要がある
+    collision_detector = Node(
+        package='go2_path_following',
+        executable='collision_detector',
+        name='collision_detector',
+        output='screen',
+        parameters=[SIM_TIME],
+    )
+
     # --- 安全弁: /cmd_vel_raw をクランプ+ウォッチドッグして /robot1/cmd_vel へ中継 ---
     #     ウォッチドッグの途絶検知は壁時計の方が安全側。sim時刻不要(#44)。
     cmd_vel_safety = Node(
@@ -164,6 +175,7 @@ def generate_launch_description():
         plan_requester,
         following,
         plan_follower,
+        collision_detector,
         cmd_vel_safety,
         tf_relay,
         rviz,
