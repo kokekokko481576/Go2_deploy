@@ -5,6 +5,11 @@
 その設定ファイル+起動ファイルで構成する。現在有効なローカルプランナは
 **DWB**(`dwb_core::DWBLocalPlanner`)で、MPPIとの比較(Issue #22)は未実施。
 
+追M3(Issue #23)で`plan_follower`にリカバリを追加した。FollowPathが
+`progress_checker`の停滞判定でABORTEDになった場合、その場回転→後退→
+最後の`goal_pose`を再publish(現在位置からの再計画を促す)を行う
+(`recovery_max_attempts`回失敗したら断念してログを出す)。
+
 ---
 
 ## 使い方(フェーズB、現在の既定)
@@ -374,7 +379,86 @@ cd ~/ros2_ws/src/go2_path_following/scripts
 「大きくズレた失敗」の原因切り分け(progress_checker停止後に本当に無反応になっているか)は
 今後の課題。生データは`scripts/results/gate1_20260803_060702.csv`。
 
+### ローカルコストマップ+リカバリ(Issue #23、2026-08-04)
+
+「大きくズレた失敗」(地図にない障害物に接触→無反応のままタイムアウト)への対策として:
+
+- `local_costmap`に`obstacle_layer`(顎LiDAR、globalと同じ観測源)を追加し、5m四方
+  ローリングに変更(#23本文どおり、既知地図の`static_layer`は持たずobstacle+inflationのみ)。
+  これでDWBの`BaseObstacle`critikが地図にない障害物にも反応できるようになった。
+- `plan_follower`にリカバリを追加(上記「概要」参照)。
+
+**Gazeboで動作確認済み**: `obstacle_layer`が`chin_lidar_scan`を購読して起動することを確認。
+家具にぶつかりやすい遠め・斜めのゴール(例: `send_goal.sh 5.0 2.5 90`)を投げ、
+`progress_checker`の停滞判定で実際に`FollowPath`が`ABORTED`になるケースを再現。
+`plan_follower`のログで「ABORTED→リカバリ試行1/3(回転→後退)→再計画要求」の一巡を確認し、
+その後の再追従でゴール近傍(xy誤差0.32m程度)まで到達して安定停止した。「共分散による
+減速スケーリング」は#23完了条件(地図にない障害物の回避+リカバリ動作)には含まれないため
+未実装のまま。
+
+### MPPIとの比較(Issue #22、2026-08-04)
+
+`controller_server.yaml`の`controller_plugins`に`FollowPath`(DWB)と`FollowPathMPPI`
+(`nav2_mppi_controller::MPPIController`)を両方ロードするようにした。速度上限は
+DWBと同じ(`vx_max=0.18`, `wz_max=0.5`, `vy_max=0.0`)。どちらを使うかは
+`FollowPath`アクションの`controller_id`で選ぶ(`plan_follower`の`controller_id`パラメータ)。
+
+```bash
+# dev-up.sh経由(既定はDWB)
+ros2 launch ~/ros2_ws/launch/demo.launch.py
+
+# MPPIで比較する場合(controller_idを上書き)
+ros2 launch ~/ros2_ws/launch/demo.launch.py controller_id:=FollowPathMPPI
+# gate1_measure.pyでの計測も同じgoal_pose系列(--seed)で両方走らせて比較できる
+```
+
+**Gazeboで動作確認済み**: `FollowPath`(DWB)/`FollowPathMPPI`とも同時ロードでエラーなく
+起動・activate、両方でゴールに向けて実際に走行することを確認。MPPI側でも
+`progress_checker`停滞によるABORTED→リカバリ(#23)→再追従→ゴール近傍到達の一巡が
+機能した。`ros2 param set /plan_follower controller_id ...`での実行時切替は、
+既知のHumble⇔Jazzy DDS type-hash問題(#7)でノードグラフ参照が壊れているこの環境では
+CLIから叩けなかった(`--no-daemon`でも同様)。ノード自体はコールバックを持つため、
+問題が解消すれば動く見込み。現状は起動時の`controller_id:=`引数での切替を確認済み。
+DWB/MPPIの数値比較(到達成功率・xy/yaw誤差)は次のGATE1(#36)再計測で行う。
+
+### 接触の即時検知(Issue #23派生、2026-08-04)
+
+#14で判明した「壁接触時に脚オドメトリが滑りを検知できずAMCLも補正しきれない」問題
+(真値との比較で位置に約1mズレ、詳細は#14参照)への対策として、`progress_checker`の
+10秒タイムアウトを待たずに接触を検知する`collision_detector`ノードを追加した。
+
+- **LiDAR近距離**: 正面近距離(既定0.3m)に反射が居続けているのに`cmd_vel_raw`が
+  前進を出し続けている → 接触中と判定
+- **IMU/オドメトリ不一致**: IMU生データ(`/robot1/imu_plugin/out`)を自前で短時間
+  (既定1.0秒)積分した推定変位が、`/robot1/odom`(脚キネマティクス)の主張する変位より
+  ずっと小さい → 空転(滑り)と判定(既存のEKF出力同士を比べても検知できなかったため、
+  IMU生データを直接使っている)
+
+いずれかを検知すると`collision_detected`(Bool)を発行し、`plan_follower`が即座に
+既存のリカバリ(その場回転→後退→再計画要求)を発火する。
+
+`plan_follower`側には「後退・再計画した直後(既定5秒以内)にまた接触/ABORTEDが
+発生したら3回粘らず即断念する」バックストップも追加した。障害物を考慮しない
+`straight_line_planner`では後退してもゴールが変わらないため同じ壁へ直進を
+繰り返してしまう(実際にGazeboで確認)ので、無理な直進でオドメトリを余計に
+滑らせないための安全弁。
+
+**Gazeboで動作確認済み**:
+- 障害物なしゴールでは誤検知なし、正常到達を確認
+- 障害物ありゴールでIMU/オドメトリ不一致が実際に発火し、検知からリカバリ開始まで
+  約30ms(`progress_checker`の10秒待ちより大幅に高速)
+- `straight_line_planner`では後退直後に同じ壁へ再接触するケースを確認(即断念
+  バックストップの想定シナリオそのもの)
+- `dijkstra`プランナ(#18のobstacle_layer込み)に切り替えると、後退後の再計画で
+  別ルートを辿るようになり、「同じ壁への繰り返し接触」は解消することを確認。
+  ただし1回の接触あたり0.2〜0.75m程度のオドメトリズレは残り、完全な解決には
+  #14(頑健性評価)側での追加対策が必要
+
 ### 未実施 / 今後
 
-- MPPIとの比較(Issue #22)。現状のローカルプランナはDWBのみ。
-- ローカルコストマップでの障害物回避(Issue #23、追M3)。`static_layer`/`voxel_layer`の追加。
+- MPPI/DWBの実測比較・第一候補の選定(Issue #22、上記の続き)。
+- 共分散による減速スケーリング(Issue #23の付随項目、完了条件外のため後回し)。
+- 閉塞時のリカバリを繰り返しても解消しないケースの切り分け(`recovery_max_attempts`到達後の扱い)。
+- 接触1回あたりのオドメトリズレ(0.2〜0.75m)自体の低減(#14、モータートルクベース検知は#49)。
+- `collision_detector`のIMU積分窓(既定1.0秒)のチューニング。短くすれば検知は速くなるが
+  歩容振動由来の誤検知リスクが増えるトレードオフがある。
