@@ -16,6 +16,7 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from nav2_msgs.action import FollowPath
 from nav_msgs.msg import Path
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.action import ActionClient
 from rclpy.node import Node
 
@@ -26,6 +27,9 @@ class PlanFollower(Node):
         super().__init__('plan_follower')
         self.declare_parameter('controller_id', 'FollowPath')
         self.controller_id = self.get_parameter('controller_id').value
+        # Issue #22: `ros2 param set /plan_follower controller_id FollowPathMPPI`で
+        # controller_serverの再起動なしにDWB/MPPIを切り替えられるようにする
+        self.add_on_set_parameters_callback(self._on_set_parameters)
 
         # リカバリ動作のパラメータ。速度はcontroller_server.yamlのFollowPath上限
         # (max_vel_theta=0.5, max_vel_x=0.18)を超えない値にする
@@ -61,6 +65,13 @@ class PlanFollower(Node):
         self._goal_pub = self.create_publisher(PoseStamped, 'goal_pose', 10)
         self.create_subscription(Path, 'plan', self.on_plan, 10)
         self.create_subscription(PoseStamped, 'goal_pose', self._on_goal_pose, 10)
+
+    def _on_set_parameters(self, params):
+        for param in params:
+            if param.name == 'controller_id':
+                self.controller_id = param.value
+                self.get_logger().info(f'controller_id を {self.controller_id} に切替')
+        return SetParametersResult(successful=True)
 
     def _on_goal_pose(self, msg):
         # リカバリ完了後の再計画要求で使う「最後にユーザーが投入したゴール」を覚えておく

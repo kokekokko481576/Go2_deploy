@@ -396,8 +396,33 @@ cd ~/ros2_ws/src/go2_path_following/scripts
 減速スケーリング」は#23完了条件(地図にない障害物の回避+リカバリ動作)には含まれないため
 未実装のまま。
 
+### MPPIとの比較(Issue #22、2026-08-04)
+
+`controller_server.yaml`の`controller_plugins`に`FollowPath`(DWB)と`FollowPathMPPI`
+(`nav2_mppi_controller::MPPIController`)を両方ロードするようにした。速度上限は
+DWBと同じ(`vx_max=0.18`, `wz_max=0.5`, `vy_max=0.0`)。どちらを使うかは
+`FollowPath`アクションの`controller_id`で選ぶ(`plan_follower`の`controller_id`パラメータ)。
+
+```bash
+# dev-up.sh経由(既定はDWB)
+ros2 launch ~/ros2_ws/launch/demo.launch.py
+
+# MPPIで比較する場合(controller_idを上書き)
+ros2 launch ~/ros2_ws/launch/demo.launch.py controller_id:=FollowPathMPPI
+# gate1_measure.pyでの計測も同じgoal_pose系列(--seed)で両方走らせて比較できる
+```
+
+**Gazeboで動作確認済み**: `FollowPath`(DWB)/`FollowPathMPPI`とも同時ロードでエラーなく
+起動・activate、両方でゴールに向けて実際に走行することを確認。MPPI側でも
+`progress_checker`停滞によるABORTED→リカバリ(#23)→再追従→ゴール近傍到達の一巡が
+機能した。`ros2 param set /plan_follower controller_id ...`での実行時切替は、
+既知のHumble⇔Jazzy DDS type-hash問題(#7)でノードグラフ参照が壊れているこの環境では
+CLIから叩けなかった(`--no-daemon`でも同様)。ノード自体はコールバックを持つため、
+問題が解消すれば動く見込み。現状は起動時の`controller_id:=`引数での切替を確認済み。
+DWB/MPPIの数値比較(到達成功率・xy/yaw誤差)は次のGATE1(#36)再計測で行う。
+
 ### 未実施 / 今後
 
-- MPPIとの比較(Issue #22)。現状のローカルプランナはDWBのみ。
+- MPPI/DWBの実測比較・第一候補の選定(Issue #22、上記の続き)。
 - 共分散による減速スケーリング(Issue #23の付随項目、完了条件外のため後回し)。
 - 閉塞時のリカバリを繰り返しても解消しないケースの切り分け(`recovery_max_attempts`到達後の扱い)。

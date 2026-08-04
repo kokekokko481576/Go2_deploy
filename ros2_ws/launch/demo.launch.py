@@ -20,6 +20,7 @@ data flow(フェーズB配線・全ノード共通):
   use_localization : 実装済み自己位置推定(go2_localization)を起動するか
   use_planner      : 経路生成の見本(straight_line_planner)を起動するか
   use_following    : 経路追従(controller_server + lifecycle)を起動するか
+  controller_id    : FollowPath(DWB、既定)/ FollowPathMPPI(MPPI、Issue #22比較用)
 """
 import os
 import shutil
@@ -47,6 +48,7 @@ def generate_launch_description():
     planner_kind = LaunchConfiguration('planner')  # straight | dijkstra | none
     use_following = LaunchConfiguration('use_following')
     use_rviz = LaunchConfiguration('use_rviz')
+    controller_id = LaunchConfiguration('controller_id')  # FollowPath(DWB) | FollowPathMPPI(#22)
 
     loc_share = get_package_share_directory('go2_localization')
     follow_share = get_package_share_directory('go2_path_following')
@@ -102,7 +104,7 @@ def generate_launch_description():
         executable='plan_follower',
         name='plan_follower',
         output='screen',
-        parameters=[NO_SIM_TIME],
+        parameters=[NO_SIM_TIME, {'controller_id': controller_id}],
     )
 
     # --- 安全弁: /cmd_vel_raw をクランプ+ウォッチドッグして /robot1/cmd_vel へ中継 ---
@@ -153,6 +155,9 @@ def generate_launch_description():
             description='経路生成: straight(直線見本) / dijkstra(NavFn曲線) / none'),
         DeclareLaunchArgument('use_following', default_value='true'),
         DeclareLaunchArgument('use_rviz', default_value='true'),
+        DeclareLaunchArgument(
+            'controller_id', default_value='FollowPath',
+            description='経路追従コントローラ(Issue #22): FollowPath(DWB) / FollowPathMPPI(MPPI)'),
         localization,
         planner_straight,
         planner_dijkstra,
