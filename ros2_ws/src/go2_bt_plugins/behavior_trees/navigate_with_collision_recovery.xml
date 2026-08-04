@@ -1,0 +1,44 @@
+<!--
+  nav2_bt_navigator標準の navigate_to_pose_w_replanning_and_recovery.xml を土台に、
+  FollowPathを ReactiveSequence + Inverter(IsCollisionDetected) でラップした。
+  collision_detector(#23、LiDAR近距離+IMU/オドメトリ不一致)が接触を検知すると
+  IsCollisionDetectedがSUCCESSを返し、Inverterで反転してFAILUREとなるため
+  ReactiveSequence全体がFAILUREになり、実行中のFollowPathが即座にhalt(キャンセル)される。
+  これによりprogress_checkerの10秒タイムアウトを待たず、外側のRecoveryNodeが
+  即座にSpin/Wait/BackUpのリカバリへ落ちる。
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <ReactiveSequence name="FollowPathUnlessCollision">
+            <Inverter>
+              <IsCollisionDetected topic_name="/collision_detected"/>
+            </Inverter>
+            <FollowPath path="{path}" controller_id="FollowPath"/>
+          </ReactiveSequence>
+          <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <Sequence name="ClearingActions">
+            <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </Sequence>
+          <Spin spin_dist="1.57"/>
+          <Wait wait_duration="2"/>
+          <BackUp backup_dist="0.20" backup_speed="0.10"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>
