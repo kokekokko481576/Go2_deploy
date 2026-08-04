@@ -4,13 +4,21 @@
 「まとめて1プロセスで起動」するための統合launch。個々の内部は知らなくても
 ブラックボックスとして起動できることを狙う(scripts/dev-up.sh が対話で引数を決める)。
 
-data flow(フェーズB配線・全ノード共通):
+data flow(フェーズB配線・全ノード共通。BT導入(#23派生)後):
   /goal_pose
-    → straight_line_planner (/plan を配信)          [use_planner]
-    → plan_follower (/plan を FollowPath アクションへ) [常時]
-    → controller_server (cmd_vel → /cmd_vel_raw)     [use_following]
-    → cmd_vel_safety (/cmd_vel_raw → /robot1/cmd_vel) [常時]
+    → goal_pose_bridge (NavigateToPoseアクションへ)      [常時]
+    → bt_navigator (go2_bt_plugins/behavior_trees/navigate_with_collision_recovery.xml)
+        - ComputePathToPose → planner_server(go2_path_planning、ダイクストラ)
+        - FollowPath → controller_server(go2_path_following、DWB)
+        - collision_detected(#23、LiDAR+IMU/オドメトリ)を検知したらFollowPathを止め、
+          Spin/Wait/BackUp(behavior_server)のリカバリへ落ちる
+    → cmd_vel_safety (/cmd_vel_raw → /robot1/cmd_vel)     [常時]
     → ロボット
+
+経路生成は常にダイクストラ(go2_path_planning、obstacle_layer込み)を使う。
+直線見本(straight_line_planner)は、地図/障害物を無視するため後退後も同じ壁へ
+直進を繰り返すことが判明した(#23)ので、既定のnavigate flowからは外した。
+単体で試したい場合はstraight_line_planner_nodeを個別に起動すること。
 
 自己位置推定は「/go2_localization/tf を誰が供給するか」だけを決める:
   use_localization:=true  → 実装済み EKF/AMCL(go2_localization)が供給
@@ -18,44 +26,43 @@ data flow(フェーズB配線・全ノード共通):
 
 引数(既定は全て true):
   use_localization : 実装済み自己位置推定(go2_localization)を起動するか
-  use_planner      : 経路生成の見本(straight_line_planner)を起動するか
   use_following    : 経路追従(controller_server + lifecycle)を起動するか
-  controller_id    : FollowPath(DWB、既定)/ FollowPathMPPI(MPPI、Issue #22比較用)
 """
 import os
 import shutil
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (
-    DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription)
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 _THIS_DIR = os.path.dirname(os.path.realpath(__file__))
 
-# フェーズB: 経路生成・controller とも自作TFを参照する。素の /tf には誰も配信しないため必須。
+# フェーズB: 経路生成・controller・BTとも自作TFを参照する。素の/tfには誰も配信しないため必須。
 LOCALIZATION_TF = '/go2_localization/tf'
-# TF参照や sim時刻同期が要るノードだけ True。それ以外は /clock 購読コスト(#44)を避けて False。
+TF_REMAP = [('/tf', LOCALIZATION_TF), ('/tf_static', '/robot1/tf_static')]
+# TF参照やsim時刻同期が要るノードだけTrue。それ以外は/clock購読コスト(#44)を避けてFalse。
 SIM_TIME = {'use_sim_time': True}
 NO_SIM_TIME = {'use_sim_time': False}
 
 
 def generate_launch_description():
     use_localization = LaunchConfiguration('use_localization')
-    planner_kind = LaunchConfiguration('planner')  # straight | dijkstra | none
     use_following = LaunchConfiguration('use_following')
     use_rviz = LaunchConfiguration('use_rviz')
-    controller_id = LaunchConfiguration('controller_id')  # FollowPath(DWB) | FollowPathMPPI(#22)
 
     loc_share = get_package_share_directory('go2_localization')
     follow_share = get_package_share_directory('go2_path_following')
     plan_share = get_package_share_directory('go2_path_planning')
+    bt_plugins_share = get_package_share_directory('go2_bt_plugins')
 
-    def _planner_is(kind):
-        return IfCondition(PythonExpression(["'", planner_kind, "' == '", kind, "'"]))
+    bt_xml_path = os.path.join(
+        bt_plugins_share, 'behavior_trees', 'navigate_with_collision_recovery.xml')
+    bt_navigator_config = os.path.join(follow_share, 'config', 'bt_navigator.yaml')
+    behavior_server_config = os.path.join(follow_share, 'config', 'behavior_server.yaml')
 
     # --- 自己位置推定(実装済み EKF/AMCL)。/go2_localization/tf を供給 ---
     localization = IncludeLaunchDescription(
@@ -64,31 +71,11 @@ def generate_launch_description():
         condition=IfCondition(use_localization),
     )
 
-    # --- 経路生成A(見本): 直線 Path を /plan へ。自作TFへの remap が必須 ---
-    planner_straight = Node(
-        package='straight_line_planner',
-        executable='straight_line_planner_node',
-        name='straight_line_planner_node',
-        output='screen',
-        parameters=[SIM_TIME],
-        remappings=[('/tf', LOCALIZATION_TF)],
-        condition=_planner_is('straight'),
-    )
-
-    # --- 経路生成B(本命): Nav2 planner_server(NavFn=ダイクストラ)。地図/コストマップから
-    #     曲線 Path を計算し plan_requester が /plan へ流す。localization(map/TF)が前提 ---
-    planner_dijkstra = IncludeLaunchDescription(
+    # --- 経路生成(ダイクストラ): Nav2 planner_server。bt_navigatorのComputePathToPoseが
+    #     直接このアクションを呼ぶ(旧plan_requesterは不要になった) ---
+    planner = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(plan_share, 'launch', 'planner.launch.py')),
-        condition=_planner_is('dijkstra'),
-    )
-    plan_requester = Node(
-        package='go2_path_planning',
-        executable='plan_requester',
-        name='plan_requester',
-        output='screen',
-        parameters=[NO_SIM_TIME],
-        condition=_planner_is('dijkstra'),
     )
 
     # --- 経路追従の本体(controller_server + lifecycle_manager) ---
@@ -98,17 +85,47 @@ def generate_launch_description():
         condition=IfCondition(use_following),
     )
 
-    # --- 橋渡し: /plan を FollowPath ゴールへ。タイマ/TF不使用なので sim時刻不要(#44) ---
-    plan_follower = Node(
-        package='go2_path_following',
-        executable='plan_follower',
-        name='plan_follower',
+    # --- BTナビゲーション(#23派生): 経路生成→追従→リカバリの判断を全てBTに持たせる ---
+    bt_navigator = Node(
+        package='nav2_bt_navigator',
+        executable='bt_navigator',
+        name='bt_navigator',
         output='screen',
-        parameters=[NO_SIM_TIME, {'controller_id': controller_id}],
+        # NavigateThroughPosesは使わないが、bt_navigatorはconfigure時に両方のデフォルトBTを
+        # 検証するため、stock版の代わりに同じ単一ゴール用ツリーを割り当てておく
+        parameters=[bt_navigator_config, {
+            'default_nav_to_pose_bt_xml': bt_xml_path,
+            'default_nav_through_poses_bt_xml': bt_xml_path,
+        }],
+        remappings=TF_REMAP,
+    )
+    behavior_server = Node(
+        package='nav2_behaviors',
+        executable='behavior_server',
+        name='behavior_server',
+        output='screen',
+        parameters=[behavior_server_config],
+        remappings=TF_REMAP,
+    )
+    lifecycle_manager_bt = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_bt',
+        output='screen',
+        parameters=[behavior_server_config],
+    )
+
+    # --- 橋渡し: /goal_pose をNavigateToPoseアクションへ。send_goal.sh等の互換用 ---
+    goal_pose_bridge = Node(
+        package='go2_path_following',
+        executable='goal_pose_bridge',
+        name='goal_pose_bridge',
+        output='screen',
+        parameters=[NO_SIM_TIME],
     )
 
     # --- 接触検知(#23派生): LiDAR近距離+IMU/オドメトリ不一致でcollision_detectedを
-    #     発行し、plan_followerがprogress_checkerの10秒待ちより速くリカバリを始める ---
+    #     発行し、bt_navigatorがprogress_checkerの10秒待ちより速くリカバリを始める ---
     #     IMU積分・LiDARタイミングはsim時刻に同期させる必要がある
     collision_detector = Node(
         package='go2_path_following',
@@ -161,20 +178,15 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('use_localization', default_value='true'),
-        DeclareLaunchArgument(
-            'planner', default_value='straight',
-            description='経路生成: straight(直線見本) / dijkstra(NavFn曲線) / none'),
         DeclareLaunchArgument('use_following', default_value='true'),
         DeclareLaunchArgument('use_rviz', default_value='true'),
-        DeclareLaunchArgument(
-            'controller_id', default_value='FollowPath',
-            description='経路追従コントローラ(Issue #22): FollowPath(DWB) / FollowPathMPPI(MPPI)'),
         localization,
-        planner_straight,
-        planner_dijkstra,
-        plan_requester,
+        planner,
         following,
-        plan_follower,
+        bt_navigator,
+        behavior_server,
+        lifecycle_manager_bt,
+        goal_pose_bridge,
         collision_detector,
         cmd_vel_safety,
         tf_relay,

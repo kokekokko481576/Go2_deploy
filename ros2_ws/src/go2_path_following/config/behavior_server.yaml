@@ -1,0 +1,33 @@
+/**:
+  behavior_server:
+    ros__parameters:
+      use_sim_time: true
+      costmap_topic: local_costmap/costmap_raw
+      footprint_topic: local_costmap/published_footprint
+      cycle_frequency: 10.0
+      behavior_plugins: ["spin", "backup", "wait"]
+      spin:
+        plugin: "nav2_behaviors/Spin"
+      backup:
+        plugin: "nav2_behaviors/BackUp"
+      wait:
+        plugin: "nav2_behaviors/Wait"
+      global_frame: odom
+      robot_base_frame: base_link
+      transform_tolerance: 0.2
+      simulate_ahead_time: 2.0
+      # controller_server.yamlのFollowPath(DWB)上限(max_vel_theta=0.5, max_vel_x=0.18)と揃える
+      max_rotational_vel: 0.5
+      min_rotational_vel: 0.2
+      rotational_acc_lim: 3.2
+      # BackUp/DriveOnHeadingは"<behavior_plugins名>.パラメータ名"で個別に持つ(Spinとは違う
+      # 命名規則。未設定だと加減速リミット無しでDriveOnHeadingがタイムアウトして失敗する)
+      backup.acceleration_limit: 2.5
+      backup.deceleration_limit: -2.5
+      backup.minimum_speed: 0.05
+
+  lifecycle_manager_bt:
+    ros__parameters:
+      use_sim_time: true
+      autostart: true
+      node_names: ["behavior_server", "bt_navigator"]

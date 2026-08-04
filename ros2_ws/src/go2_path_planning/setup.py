@@ -26,8 +26,6 @@ setup(
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
-        'console_scripts': [
-            'plan_requester = go2_path_planning.plan_requester:main',
-        ],
+        'console_scripts': [],
     },
 )

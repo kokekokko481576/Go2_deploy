@@ -1,0 +1,25 @@
+/**:
+  bt_navigator:
+    ros__parameters:
+      use_sim_time: true
+      global_frame: map
+      robot_base_frame: base_link
+      # フェーズB: 自作TFを参照する(demo.launch.pyで/tf remap済み)
+      odom_topic: /go2_localization/odometry/filtered
+      bt_loop_duration: 10
+      default_server_timeout: 20
+      # default_nav_to_pose_bt_xmlはgo2_bt_pluginsのshareディレクトリに依存するため、
+      # 固定パスを書けないここではなくdemo.launch.py側でパラメータとして渡す
+      plugin_lib_names:
+        - nav2_compute_path_to_pose_action_bt_node
+        - nav2_follow_path_action_bt_node
+        - nav2_spin_action_bt_node
+        - nav2_wait_action_bt_node
+        - nav2_back_up_action_bt_node
+        - nav2_clear_costmap_service_bt_node
+        - nav2_goal_updated_condition_bt_node
+        - nav2_rate_controller_bt_node
+        - nav2_recovery_node_bt_node
+        - nav2_pipeline_sequence_bt_node
+        - nav2_round_robin_node_bt_node
+        - go2_is_collision_detected_condition_bt_node

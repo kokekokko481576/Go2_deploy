@@ -27,7 +27,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'plan_follower = go2_path_following.plan_follower:main',
+            'goal_pose_bridge = go2_path_following.goal_pose_bridge:main',
             'collision_detector = go2_path_following.collision_detector:main',
         ],
     },

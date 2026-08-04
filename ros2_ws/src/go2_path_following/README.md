@@ -1,53 +1,50 @@
-# go2_path_following — 経路追従（Nav2 controller_server / 現状DWB・MPPIは#22で比較予定）
+# go2_path_following — 経路追従（Nav2 controller_server / BehaviorTree導入済み）
 
-経路追従 練習(追M2: 平地の経路追従)用のbringupパッケージ。`go2_localization`と同様、
-自作ノードは`plan_follower`(小さな橋渡し)のみで、本体は既製の`nav2_controller`と
-その設定ファイル+起動ファイルで構成する。現在有効なローカルプランナは
-**DWB**(`dwb_core::DWBLocalPlanner`)で、MPPIとの比較(Issue #22)は未実施。
+経路追従 練習(追M2: 平地の経路追従)用のbringupパッケージ。本体は既製の
+`nav2_controller`とその設定ファイル+起動ファイルで構成する。現在有効な
+ローカルプランナは**DWB**(`dwb_core::DWBLocalPlanner`)。`FollowPathMPPI`
+(MPPI)も同時ロードされているが、Issue #22の数値比較はまだ未実施。
 
-追M3(Issue #23)で`plan_follower`にリカバリを追加した。FollowPathが
-`progress_checker`の停滞判定でABORTEDになった場合、その場回転→後退→
-最後の`goal_pose`を再publish(現在位置からの再計画を促す)を行う
-(`recovery_max_attempts`回失敗したら断念してログを出す)。
+**Issue #50でBehaviorTree(`nav2_bt_navigator`)を導入した。** 経路生成→追従→
+リカバリの判断(接触検知・再計画・リトライ)は全て`go2_bt_plugins`のBT XML側に
+あり、このパッケージの自作ノードは`goal_pose_bridge`(`/goal_pose`を
+`NavigateToPose`アクションへ変換する薄い橋渡し)と`collision_detector`
+(LiDAR+IMU/オドメトリでの接触検知、Issue #23派生)の2つだけになった。
+旧`plan_follower`(手書きの追従・リカバリ状態機械)は削除済み。
+BTの構成・リカバリの詳細は`go2_bt_plugins/README.md`参照。
 
 ---
 
-## 使い方(フェーズB、現在の既定)
+## 使い方(BT導入後の既定)
 
-devコンテナ + simコンテナの両方を起動した状態で、まずビルドする:
+devコンテナ + simコンテナの両方を起動した状態で、まずビルドする(BTプラグインは
+C++なので`go2_bt_plugins`も含める):
 
 ```bash
-cd ~/ros2_ws && colcon build --symlink-install --packages-select go2_path_following
+cd ~/ros2_ws && colcon build --symlink-install \
+  --packages-select go2_path_following go2_bt_plugins go2_path_planning go2_localization
 source install/setup.bash
 ```
 
-続いて、別ターミナルで以下を順に起動する(フェーズBは`go2_localization`の起動が前提。
-フェーズAで確認したい場合は`controller.launch.py`の`/tf` remapを一時的に`/robot1/tf`へ
-戻す。フェーズA/Bの意味は「概要」参照):
+起動は統合launch(`ros2_ws/launch/demo.launch.py`)を推奨する。自己位置推定
+(go2_localization)・経路生成(go2_path_planning、dijkstra)・経路追従
+(controller_server)・BT(bt_navigator+behavior_server)・接触検知
+(collision_detector)・橋渡し(goal_pose_bridge)・安全弁(cmd_vel_safety)を
+まとめて起動する:
 
 ```bash
-# 1) 自己位置推定(EKF/AMCL) … 自作TF /go2_localization/tf を配信
-ros2 launch go2_localization localization.launch.py
-
-# 2) controller_server + lifecycle_manager … このパッケージの本体
-ros2 launch go2_path_following controller.launch.py
-
-# 3) 橋渡しノード … plan トピックを FollowPath ゴールに変換
-ros2 run go2_path_following plan_follower
-
-# 4) 経路生成 … Path(/plan)を配信。フェーズBは自作TFへのremapが必須
-#    (素の /tf には誰も配信していないため、忘れるとPathが一切出ない)
-ros2 run straight_line_planner straight_line_planner_node --ros-args -p use_sim_time:=true \
-  -r /tf:=/go2_localization/tf
-
-# 5) 速度セーフティ … controller の生出力を最終駆動トピックへ中継
-ros2 run cmd_vel_safety cmd_vel_safety_node --ros-args -r cmd_vel:=/robot1/cmd_vel
+ros2 launch ~/ros2_ws/launch/demo.launch.py
 ```
+
+個々のノードを手で立てたい場合(デバッグ時)は`demo.launch.py`の中身を参照。
+`controller.launch.py`(このパッケージ)はcontroller_server単体のみを起動する
+ので、bt_navigator/behavior_server/planner_server/goal_pose_bridgeは別途要る。
 
 ### ゴールを投入して動作確認
 
-ゴールを`/goal_pose`にpublishすると、`straight_line_planner`がPathを生成し、
-`plan_follower`経由でロボットが追従を始める。YAML手打ちはスペース位置を間違えやすいので
+ゴールを`/goal_pose`にpublishすると、`goal_pose_bridge`が`NavigateToPose`
+アクションへ変換し、`bt_navigator`が経路生成→追従→(必要なら)リカバリを
+すべて実行する。YAML手打ちはスペース位置を間違えやすいので
 `scripts/send_goal.sh`を推奨(`x` `y` `yaw(度)`を引数で渡す。省略時は`x=3.0 y=0.0 yaw=0`):
 
 ```bash
@@ -75,10 +72,11 @@ ros2 topic echo /plan --qos-durability transient_local --once
 ros2 topic info /robot1/cmd_vel -v
 ```
 
-- `/plan`が出ない → `straight_line_planner_node`の`/tf` remap忘れ、または`use_sim_time`
-  未指定(下記「よくある詰まり」参照)。
-- `/plan`は出るのにロボットが動かない → `plan_follower`/`controller_server`/
-  `cmd_vel_safety`のいずれかの配線、またはlifecycle未起動を疑う。
+- `/plan`が出ない → `goal_pose_bridge`→`bt_navigator`→`planner_server`の途中で
+  ゴールが弾かれている(ゴールが地図外・障害物内、TF未取得等)。`bt_navigator`の
+  ログで`ComputePathToPose`の失敗理由を確認する。
+- `/plan`は出るのにロボットが動かない → `controller_server`/`cmd_vel_safety`の
+  いずれかの配線、またはlifecycle未起動を疑う。
 
 ---
 
@@ -92,18 +90,25 @@ ros2 topic info /robot1/cmd_vel -v
 - **M1(テレオペ`cmd_vel`確認)**: 手動指令でロボットが期待どおり動くことの確認。
   本パッケージの最終段は`cmd_vel_safety`を経て`/robot1/cmd_vel`へ出す構成で、
   この駆動経路がM1と共通。
-- **M2(controller server / 追M2: 平地の経路追従・Issue #21)**: `straight_line_planner`が
-  出した`Path`を`controller_server`(DWB)で追従し、`cmd_vel`を生成する。本パッケージの
-  主目的。障害物回避(ローカルコストマップ)は完了条件に含めず、追M3(Issue #23)で扱う。
+- **M2(controller server / 追M2: 平地の経路追従・Issue #21)**: `Path`を
+  `controller_server`(DWB)で追従し、`cmd_vel`を生成する。本パッケージの主目的。
+  当初は`straight_line_planner`の出力を追従する最小構成だった(障害物回避は
+  完了条件に含めず追M3(Issue #23)で扱う方針)。Issue #50でBT化した現在は経路生成に
+  常時dijkstra(go2_path_planning)を使う。
 
-### なぜこの設計になっているか(bt_navigatorを使わない理由)
+### 設計の変遷(#21でbt_navigatorを見送り→#50で導入)
 
 Nav2の`controller_server`は`FollowPath`アクション(`nav2_msgs/action/FollowPath`)で
 駆動する仕組みで、`nav_msgs/Path`トピックを直接subscribeするわけではない。本来は
-`bt_navigator`がこのアクションを呼ぶが、本パッケージは`bt_navigator`を導入せず
-「`straight_line_planner`が生成済みのPathを追従させてみる」(Issue #21)という最小構成に
-とどめる。そのため`plan_follower`ノードが`plan`トピックを購読し、受け取るたびに
-`FollowPath`ゴールとして送るだけの橋渡しを行う(リカバリ・再計画はM3以降)。
+`bt_navigator`がこのアクションを呼ぶが、当初(Issue #21)は`bt_navigator`を導入せず
+「`straight_line_planner`が生成済みのPathを追従させてみる」という最小構成にとどめ、
+`plan_follower`ノードが`plan`トピックを購読して`FollowPath`ゴールへ橋渡ししていた。
+
+Issue #50で、接触検知→リカバリの判断ロジックが`plan_follower`に条件分岐・タイマー・
+リトライ状態として積もってきたため、判断のオーケストレーションを`nav2_bt_navigator`へ
+移した。現在は`goal_pose_bridge`が`/goal_pose`を`NavigateToPose`アクションへ変換する
+だけの薄い橋渡しで、経路生成(`ComputePathToPose`)・追従(`FollowPath`)・リカバリの
+判断は全てBT XML(`go2_bt_plugins`)側にある。詳細は`go2_bt_plugins/README.md`参照。
 
 `controller_server`はGATE1で1つだけ動かす前提のため、simコンテナ(upstream本家)が既に
 動かしている`controller_server`とはノード名・トピック名が別になるよう配線している
@@ -114,64 +119,54 @@ Nav2の`controller_server`は`FollowPath`アクション(`nav2_msgs/action/Follo
 実測で確認済み(Issue #35、2026-07-17)。汚染防止のため、GATE1計測時はsimを
 `enable_nav2:=false`で起動してupstream Nav2を丸ごと止める(下記「GATE1計測時の…」)。
 
-### データフロー
+### データフロー(BT導入後)
 
 ```
-/goal_pose ──▶ straight_line_planner ──/plan(Path)──▶ plan_follower
-                                                            │
-                                          follow_path(FollowPath action)
-                                                            ▼
-        /go2_localization/tf ──(現在位置)──▶ controller_server(DWB)
-                                                            │
-                                                  /cmd_vel_raw(Twist)
-                                                            ▼
-                                                     cmd_vel_safety
-                                                            │
-                                                   /robot1/cmd_vel
-                                                            ▼
-                                                    sim(cmd_vel_pub→歩容)
+/goal_pose ──▶ goal_pose_bridge ──NavigateToPose(action)──▶ bt_navigator
+                                                                   │
+                                        ComputePathToPose(action) ├──▶ planner_server(dijkstra)
+                                                                   │
+                                               FollowPath(action) ├──▶ controller_server(DWB)
+                                                                   │         │
+                                          Spin/Wait/BackUp(action)│   /cmd_vel_raw(Twist)
+                                                                   ▼         ▼
+                                                          behavior_server  cmd_vel_safety
+                                                                                  │
+                                                                        /robot1/cmd_vel
+                                                                                  ▼
+                                                                    sim(cmd_vel_pub→歩容)
+
+collision_detector(LiDAR+IMU/オドメトリ) ──/collision_detected(Bool)──▶ bt_navigator
+                                                                          (IsCollisionDetected条件)
 ```
 
 ### ノード
 
 | ノード | 実行元 | 役割 |
 |--------|--------|------|
-| `controller_server` | `controller.launch.py`(`nav2_controller`) | Pathを追従して`cmd_vel`を生成。本体 |
+| `goal_pose_bridge` | `ros2 run`(このパッケージ) | `/goal_pose`を`NavigateToPose`ゴールへ橋渡し |
+| `bt_navigator` | `nav2_bt_navigator` | BT XMLを実行し経路生成・追従・リカバリを統括 |
+| `behavior_server` | `nav2_behaviors` | リカバリの実体(Spin/BackUp/Wait) |
+| `controller_server` | `controller.launch.py`(`nav2_controller`) | Pathを追従して`cmd_vel`を生成 |
 | `lifecycle_manager_navigation` | `controller.launch.py`(`nav2_lifecycle_manager`) | `controller_server`のlifecycleを`autostart` |
-| `plan_follower` | `ros2 run`(このパッケージ) | `/plan`を`FollowPath`ゴールへ橋渡し |
+| `collision_detector` | `ros2 run`(このパッケージ、Issue #23派生) | LiDAR近距離+IMU/オドメトリ不一致で接触を検知 |
 
 ### 入出力(トピック / アクション)
 
 | 名前 | 型 | 向き | ノード | 備考 |
 |------|----|------|--------|------|
-| `/plan` | `nav_msgs/msg/Path` | 購読 | `plan_follower` | `straight_line_planner`が配信。QoSは`transient_local` |
-| `follow_path` | `nav2_msgs/action/FollowPath` | クライアント→サーバ | `plan_follower`→`controller_server` | `goal.controller_id`は既定`FollowPath` |
-| `/go2_localization/tf` | `tf2_msgs/msg/TFMessage` | 参照 | `controller_server` | フェーズBの`map→odom→base_link`。launchで`/tf`をremap |
-| `/robot1/tf_static` | `tf2_msgs/msg/TFMessage` | 参照 | `controller_server` | launchで`/tf_static`をremap |
+| `/goal_pose` | `geometry_msgs/msg/PoseStamped` | 購読 | `goal_pose_bridge` | `send_goal.sh`で投入 |
+| `navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | クライアント→サーバ | `goal_pose_bridge`→`bt_navigator` | |
+| `follow_path` | `nav2_msgs/action/FollowPath` | クライアント→サーバ | `bt_navigator`→`controller_server` | BT XMLで`controller_id="FollowPath"`固定 |
+| `/collision_detected` | `std_msgs/msg/Bool` | 購読 | `bt_navigator`(`IsCollisionDetected`条件) | `collision_detector`が配信 |
+| `/go2_localization/tf` | `tf2_msgs/msg/TFMessage` | 参照 | `controller_server`, `bt_navigator` | フェーズBの`map→odom→base_link`。launchで`/tf`をremap |
+| `/robot1/tf_static` | `tf2_msgs/msg/TFMessage` | 参照 | `controller_server`, `bt_navigator` | launchで`/tf_static`をremap |
 | `/cmd_vel_raw` | `geometry_msgs/msg/Twist` | 発行 | `controller_server` | DWBの生出力(launchで`cmd_vel`をremap) |
 | `/robot1/cmd_vel` | `geometry_msgs/msg/Twist` | 発行 | `cmd_vel_safety` | 最終駆動指令(simが購読する唯一の入力) |
-| `/goal_pose` | `geometry_msgs/msg/PoseStamped` | (上流) | `straight_line_planner`が購読 | `send_goal.sh`で投入 |
 
 ---
 
 ## 詳細
-
-### plan_follower の内部ロジック
-
-`go2_path_following/plan_follower.py`。ノード名`plan_follower`。動作は単純で、以下だけを行う:
-
-1. パラメータ`controller_id`(既定`FollowPath`)を読み、`follow_path`アクションの
-   `ActionClient`と、`plan`トピック(`nav_msgs/Path`、キュー長10)の購読を作る。
-2. `plan`を受信するたび`on_plan()`が走る:
-   - `follow_path`サーバを1秒待って不在なら警告(5秒throttle)して`return`。
-   - **実行中のゴールがあればキャンセル**(`cancel_goal_async`)してから、
-   - 新しい`Path`を`FollowPath.Goal`に詰め、`controller_id`を設定して非同期送信する。
-3. ゴール応答コールバック`_on_goal_response()`で、accept時のみ`_goal_handle`を保持
-   (reject時は警告してハンドルを持たない)。
-
-つまり「新しいPathが来たら古い追従を止めて送り直す」だけで、フィードバック監視・
-結果待ち・リトライは持たない。終了判定(ゴール到達)は`controller_server`側の
-`goal_checker`(後述)が担い、`plan_follower`はそれを監視しない。
 
 ### controller.launch.py の配線
 
@@ -454,11 +449,25 @@ DWB/MPPIの数値比較(到達成功率・xy/yaw誤差)は次のGATE1(#36)再計
   ただし1回の接触あたり0.2〜0.75m程度のオドメトリズレは残り、完全な解決には
   #14(頑健性評価)側での追加対策が必要
 
+### BehaviorTree導入(Issue #50、2026-08-04)
+
+接触検知→リカバリの判断が`plan_follower`内に条件分岐・タイマー・リトライ状態として
+積もってきたため、判断のオーケストレーションを`nav2_bt_navigator`へ移した。
+詳細・BT XML・カスタム条件ノードは`go2_bt_plugins/README.md`参照。要点:
+
+- `plan_follower`/`plan_requester`を削除。`goal_pose_bridge`(単純な橋渡し)に置き換え
+- 経路生成は常時dijkstra(go2_path_planning)に統一。`straight_line_planner`は
+  `ComputePathToPose`アクションを実装していないためbt_navigatorの標準フローに乗らず、
+  既定flowから外した(単体起動は可能)
+- **Gazeboで確認済み**: クリーンな状態(sim再起動直後)から接触→検知→リカバリ
+  (Spin失敗→Wait成功のフォールバック含む)→再計画→到達、の一連を確認
+
 ### 未実施 / 今後
 
-- MPPI/DWBの実測比較・第一候補の選定(Issue #22、上記の続き)。
+- MPPI/DWBの実測比較・第一候補の選定(Issue #22)。BT XMLでは`controller_id="FollowPath"`
+  固定になったため、比較するには別XMLか値の外出しが必要
 - 共分散による減速スケーリング(Issue #23の付随項目、完了条件外のため後回し)。
-- 閉塞時のリカバリを繰り返しても解消しないケースの切り分け(`recovery_max_attempts`到達後の扱い)。
 - 接触1回あたりのオドメトリズレ(0.2〜0.75m)自体の低減(#14、モータートルクベース検知は#49)。
 - `collision_detector`のIMU積分窓(既定1.0秒)のチューニング。短くすれば検知は速くなるが
   歩容振動由来の誤検知リスクが増えるトレードオフがある。
+- `BehaviorTreeEngine: tick rate 100.00 was exceeded`警告の原因調査(機能には影響なし)。
