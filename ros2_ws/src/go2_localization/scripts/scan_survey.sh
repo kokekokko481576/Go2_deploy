@@ -2,6 +2,9 @@
 # 部屋の複数地点でチン(顎)LiDARの有効反射数を確認する簡易サーベイ(#54切り分け)。
 set -eu
 
+TMP_SCAN="$(mktemp)"
+trap 'rm -f "$TMP_SCAN"' EXIT
+
 POINTS=(
   "1.0 0.0 テストコース1(1,0)"
   "3.0 0.0 テストコース2(3,0)"
@@ -17,16 +20,16 @@ for p in "${POINTS[@]}"; do
   y=$(echo "$p" | cut -d' ' -f2)
   label=$(echo "$p" | cut -d' ' -f3-)
 
-  docker exec go2-sim bash -c "source /opt/ros/jazzy/setup.bash 2>/dev/null && gz service -s /world/default/set_pose --reqtype gz.msgs.Pose --reptype gz.msgs.Boolean --timeout 2000 --req \"name: 'robot1_my_bot', position: {x: ${x}, y: ${y}, z: 0.46}, orientation: {x: 0, y: 0, z: 0, w: 1}\"" > /dev/null 2>&1
+  docker exec go2-sim bash -c "source /opt/ros/jazzy/setup.bash 2>/dev/null && gz service -s /world/default/set_pose --reqtype gz.msgs.Pose --reptype gz.msgs.Boolean --timeout 2000 --req \"name: 'robot1_my_bot', position: {x: ${x}, y: ${y}, z: 0.46}, orientation: {x: 0, y: 0, z: 0, w: 1}\"" > /dev/null 2>&1 || true
   sleep 1.5
 
-  docker exec arbeit-ros2 bash -c "source /opt/ros/humble/setup.bash && source /home/ros/ros2_ws/install/setup.bash && timeout 4 ros2 topic echo /go2_localization/chin_lidar_scan --once 2>/dev/null" > /tmp/scan_survey_tmp.yaml 2>/dev/null || true
+  docker exec arbeit-ros2 bash -c "source /opt/ros/humble/setup.bash && source /home/ros/ros2_ws/install/setup.bash && timeout 4 ros2 topic echo /go2_localization/chin_lidar_scan --once 2>/dev/null" > "$TMP_SCAN" 2>/dev/null || true
 
-  python3 - "$label" "$x" "$y" <<'PYEOF'
+  python3 - "$label" "$x" "$y" "$TMP_SCAN" <<'PYEOF'
 import sys, yaml, math
-label, x, y = sys.argv[1], sys.argv[2], sys.argv[3]
+label, x, y, tmp_scan = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 try:
-    docs = list(yaml.safe_load_all(open('/tmp/scan_survey_tmp.yaml')))
+    docs = list(yaml.safe_load_all(open(tmp_scan)))
     doc = docs[0]
     ranges = doc['ranges']
     finite = [r for r in ranges if isinstance(r, float) and math.isfinite(r)]
