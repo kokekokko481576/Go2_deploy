@@ -72,12 +72,20 @@ ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 map base_link
 |--|--|--|
 | 位置づけ | Phase1 M1（生M1）／軽量な検証・デバッグ用 | 生M2 以降／本番の経路生成 |
 | 経路 | start→goal の**直線補間のみ** | コストマップ上のグリッド探索（障害物回避あり） |
-| 障害物回避 | なし | static + inflation layer で回避（obstacle layer は将来追加） |
-| 駆動方式 | `goal_pose` を直接 subscribe → `plan` を publish | `plan_requester` が `ComputePathToPose` アクション経由で planner_server を叩き `plan` へ流す |
+| 障害物回避 | なし | static + obstacle（顎LiDARのライブスキャン、Issue #18で追加済み） + inflation layer で回避 |
+| 駆動方式 | `goal_pose` を直接 subscribe → `plan` を publish | Issue #50以降は `nav2_bt_navigator` が `ComputePathToPose` アクション経由で planner_server を直接叩く（旧`plan_requester`は削除済み）。結果は `plan` トピックにも配信される |
 
-重要なのは、**両者がトピック I/F（`goal_pose` / `plan`、型、QoS）を完全に揃えている**点である。
-下流の経路追従（`go2_path_following` の `plan_follower`）から見ると、どちらのプランナが動いていても区別がつかず、差し替えは「どちらのノードを起動するか」だけで済む。
-本パッケージのソースコメントでも「Nav2 の planner_server が最終的に差し替わっても購読側が気づかないよう、トピック名・型を Nav2 に合わせている」と明記されている。
+両者は**トピック I/F（`goal_pose` / `plan`、型、QoS）を完全に揃えている**（本パッケージの
+ソースコメントにも「Nav2 の planner_server が最終的に差し替わっても購読側が気づかないよう、
+トピック名・型を Nav2 に合わせている」と明記されている）。これはIssue #50でBT化する前の、
+`plan_follower`が`plan`トピックを直接購読していた構成での設計意図であり、旧`plan_follower`の
+下流からは実際にどちらのプランナが動いていても区別がつかなかった。
+
+**現在の既定フロー（BT導入後）ではこの互換性は成立しない**: `nav2_bt_navigator`は`plan`トピックではなく
+`ComputePathToPose`アクションを直接呼ぶため、このアクションを実装していない
+`straight_line_planner`はbt_navigatorの標準フローに乗らない（既定flowから外れている理由。
+`go2_path_following/README.md`「設計の変遷」参照）。トピックI/Fの一致が活きるのは、
+本ノードを単体でデバッグ用に手動起動し、`plan`を直接購読する自作の下流ノードと組み合わせる場合。
 
 したがって使い分けは:
 

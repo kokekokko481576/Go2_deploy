@@ -1,9 +1,13 @@
 # go2_path_planning — 経路生成（Nav2 planner_server）
 
 経路生成サブシステム（生M2: コストマップ + グリッド探索、Issue #16/#17。
-生M3: obstacle_layer追加、Issue #18）の bringup パッケージ。自作ノードは
-`plan_requester`（小さな橋渡し）1つだけで、経路計画の本体は既製の Nav2
-`planner_server`（NavFn=**ダイクストラ法**）を設定ファイル + 起動ファイルで駆動する構成。
+生M3: obstacle_layer追加、Issue #18）の bringup パッケージ。経路計画の本体は
+既製の Nav2 `planner_server`（NavFn=**ダイクストラ法**）を設定ファイル + 起動
+ファイルで駆動する構成。かつては自作の`plan_requester`ノードが`goal_pose`を
+購読して`ComputePathToPose`アクションを叩いていたが、Issue #50でBT化した後は
+`nav2_bt_navigator`（`go2_path_following`側）が直接このアクションを呼ぶため、
+`plan_requester`は削除済み。現在このパッケージに自作ノードは無く、設定ファイル+
+起動ファイルのみの純粋なbringupパッケージになっている。
 
 ---
 
@@ -16,12 +20,21 @@ cd ~/ros2_ws && colcon build --symlink-install --packages-select go2_path_planni
 source install/setup.bash
 ```
 
-### 起動（フェーズB構成: 自作TF）
+### 起動（BT導入後の既定）
 
-devコンテナ + simコンテナの両方を起動した状態で、別ターミナルでそれぞれ立ち上げる。
-`straight_line_planner`（生M1）の代わりに下記の 2 つ（`planner.launch.py` と
-`plan_requester`）を使うだけで、それ以外は `go2_path_following/README.md` の
-「使い方（フェーズB）」と同じ。
+Issue #50でBT化された現在、このパッケージを単体で手動起動する場面は通常無い。
+フルスタックは統合launchでまとめて起動する（詳細は
+`go2_path_following/README.md`「使い方(BT導入後の既定)」参照）:
+
+```bash
+ros2 launch ~/ros2_ws/launch/demo.launch.py
+```
+
+`planner.launch.py`（このパッケージ）が起動するのは`planner_server`+
+`lifecycle_manager_planning`のみで、`goal_pose`から`ComputePathToPose`を
+駆動する役目は`nav2_bt_navigator`（BT XMLは`go2_bt_plugins`）が直接担う。
+`planner_server`単体をデバッグしたい場合のみ、このパッケージだけを個別に
+起動できる:
 
 ```bash
 # 自己位置推定（map_server を含む。static_layer の地図配信元）
@@ -29,14 +42,6 @@ ros2 launch go2_localization localization.launch.py
 
 # planner_server + lifecycle_manager（このパッケージ）
 ros2 launch go2_path_planning planner.launch.py
-
-# goal_pose → ComputePathToPose → plan の橋渡しノード（このパッケージ）
-ros2 run go2_path_planning plan_requester
-
-# 経路追従チェーン
-ros2 launch go2_path_following controller.launch.py
-ros2 run go2_path_following plan_follower
-ros2 run cmd_vel_safety cmd_vel_safety_node --ros-args -r cmd_vel:=/robot1/cmd_vel
 ```
 
 ### ゴール投入
@@ -47,22 +52,20 @@ ros2 run cmd_vel_safety cmd_vel_safety_node --ros-args -r cmd_vel:=/robot1/cmd_v
 ~/ros2_ws/src/go2_path_following/scripts/send_goal.sh -1.71 4.70 90
 ```
 
-### プランナIDの指定（任意）
+### プランナIDの指定
 
-`plan_requester` は `planner_id` パラメータで planner_server 側のプラグイン名を
-選ぶ。既定は `GridBased`（`planner_server.yaml` の `planner_plugins` と一致）。
-
-```bash
-ros2 run go2_path_planning plan_requester --ros-args -p planner_id:=GridBased
-```
+以前は自作`plan_requester`の`planner_id`パラメータで切り替えられたが、BT化後は
+BT XML（`go2_bt_plugins/behavior_trees/navigate_with_collision_recovery.xml`）の
+`<ComputePathToPose ... planner_id="GridBased"/>`に固定されている。既定の
+`GridBased`（`planner_server.yaml` の `planner_plugins` と一致）から切り替えたい
+場合は、BT XML側のこの属性を書き換える必要がある。
 
 ### 動作確認
 
-`plan_requester` のログに `published path: N points, planning_time=...s` が出れば
-計画は成功している。生成された経路そのものは `plan` トピックで確認する。
+`plan_requester`は削除済みのため、計画成功の確認は`bt_navigator`のログ
+（`ComputePathToPose`の成否）と`plan`トピックそのもので行う。
 
 ```bash
-# plan_requester のログに ready と published path が出るか
 # 生成された Path を直接見る（QoS を合わせないと届かない点に注意）
 ros2 topic echo /plan --qos-durability transient_local --once
 ```
@@ -77,42 +80,47 @@ ros2 topic echo /plan --qos-durability transient_local --once
 （`docs/計画/経路生成.md`）。生M1 の `straight_line_planner`（直線経路）を、
 コストマップを使った既知障害物回避のグリッド探索プランナに差し替えるステップ。
 
-Nav2 の `planner_server` は本来 `bt_navigator` から `ComputePathToPose`
-アクションで駆動される。しかし本構成では `plan_follower`（経路追従側）と同様に
-`bt_navigator` を導入せず、`plan_requester` が `goal_pose` を購読して自分で
-アクションを呼び、結果の `Path` を `plan` トピックに流す最小構成にとどめる。
+Nav2 の `planner_server` は `bt_navigator` から `ComputePathToPose` アクションで
+駆動される。当初（生M2導入時）は `bt_navigator` を導入せず、自作の `plan_requester`
+が `goal_pose` を購読して自分でアクションを呼ぶ最小構成にとどめていたが、
+Issue #50で `bt_navigator` を導入した後は `plan_requester` を廃し、`bt_navigator`
+が直接このアクションを呼ぶ構成に一本化した（下記「データフロー」参照）。
 
-### データフロー
+### データフロー（BT導入後）
 
 ```
 goal_pose (PoseStamped)
-    │  ［plan_requester が購読］
+    │  ［goal_pose_bridge が購読、go2_path_following］
     ▼
-plan_requester ──ComputePathToPose アクション──▶ planner_server (NavFn)
-    │                                                    │
-    │  ◀────────── 結果 Path ─────────────────────────────┘
-    ▼
-plan (Path, QoS=TRANSIENT_LOCAL)
-    │  ［下流の plan_follower が購読］
-    ▼
-plan_follower → controller_server(DWB) → cmd_vel_safety → /robot1/cmd_vel
+goal_pose_bridge ──NavigateToPose アクション──▶ bt_navigator
+                                                     │  ComputePathToPose アクション
+                                                     ▼
+                                              planner_server (NavFn)
+                                                     │  結果 Path
+                                                     ▼
+                                    plan (Path, QoS=TRANSIENT_LOCAL、可視化用)
+                                                     │
+                                          FollowPath アクション経由でそのまま
+                                                     ▼
+                                    controller_server(DWB) → cmd_vel_safety → /robot1/cmd_vel
 ```
 
-`straight_line_planner`（生M1）とトピックI/F（`goal_pose` / `plan`、QoS 含む）を
-**完全に揃えてある**ため、下流（`plan_follower` → `controller_server` →
-`cmd_vel_safety`）はどちらのプランナが動いているか気づかない。差し替えは
-「どちらを起動するか」だけで済む。
+`straight_line_planner`（生M1）とはトピックI/F（`goal_pose` / `plan`、QoS 含む）
+を揃えているが、BT導入後の既定フローは`goal_pose_bridge`→`bt_navigator`経由の
+アクション呼び出しに一本化されており、`straight_line_planner`は単体起動での
+デバッグ用途にのみ残っている（詳細は`go2_path_following/README.md`
+「設計の変遷」参照）。
 
-### 入出力（`plan_requester` ノード）
+### 入出力（`planner_server`）
 
-ノード名: `plan_requester`
+本パッケージに自作ノードは無く、`planner_server`（`nav2_planner`）を素のまま
+起動するだけ。`ComputePathToPose`アクションは`bt_navigator`（`go2_path_following`
+側）がBT XMLから直接呼ぶ。
 
 | 種別 | 名前 | 型 | 備考 |
 |------|------|-----|------|
-| Subscribe | `goal_pose` | `geometry_msgs/PoseStamped` | 目標姿勢。QoS depth=10（既定） |
-| Publish | `plan` | `nav_msgs/Path` | 生成経路。QoS: RELIABLE / TRANSIENT_LOCAL / depth=1（latched 相当） |
-| Action Client | `compute_path_to_pose` | `nav2_msgs/action/ComputePathToPose` | planner_server が提供 |
-| Parameter | `planner_id` | string | 既定 `GridBased`。planner_server のプラグイン名 |
+| Action Server | `compute_path_to_pose` | `nav2_msgs/action/ComputePathToPose` | `bt_navigator`から`planner_id="GridBased"`固定で呼ばれる |
+| Publish | `plan` | `nav_msgs/Path` | `planner_server`本体が計画結果を可視化用に配信 |
 
 ### 起動されるノード（`planner.launch.py`）
 
@@ -186,40 +194,34 @@ plan_follower → controller_server(DWB) → cmd_vel_safety → /robot1/cmd_vel
 
 > 地図にある既知障害物はstatic_layer、地図に無い障害物（顎LiDARが今見ているもの）は
 > obstacle_layerがそれぞれ担当し、両方の上にinflation_layerが安全マージンを掛ける。
-> 再計画のトリガ設計（経路無効化時のみ・1Hz上限）はまだ実装していない（下記「未実施」参照）。
-> 現状は`plan_requester`が新しい`goal_pose`を受け取った時点のコストマップで計画するだけなので、
-> 「ゴールを投入した時点で既に見えている障害物」は避けられるが、「Path追従中に新たに
-> 出現した障害物」に対する自動再計画はまだ無い。
+> 「経路無効化時のみ・1Hz上限」という当初の再計画トリガ設計はまだ実装していないが、
+> Issue #50でBT化した際にstockのBTテンプレートを土台にしたため、結果的に
+> `RateController hz="1.0"`によって**常時1Hzで再計画**される動作になっている
+> （詳細・経緯は下記「未実施」参照）。
 
 #### lifecycle_manager_planning
 
 - `autostart: true` — 起動時に自動でライフサイクルをアクティブ化
 - `node_names: ["planner_server"]` — 管理対象は planner_server のみ
 
-### `plan_requester.py` の内部ロジック
+### （Issue #50で削除済み）`plan_requester` の内部ロジック
 
-1. `goal_pose`（`PoseStamped`）を購読（QoS depth=10）。
-2. ゴール受信時、`compute_path_to_pose` アクションサーバの起動を最大 1.0 秒待機。
-   未起動なら 5 秒スロットルの警告を出して return（サーバが立つまで再送で対応）。
-3. `ComputePathToPose.Goal` を構築して送信:
-   - `goal`: 受信した `PoseStamped` をそのまま設定
-   - `planner_id`: パラメータ `planner_id`（既定 `GridBased`）
-   - `use_start = False`: 始点を指定せず、現在位置（TF）を始点に使わせる
-4. ゴールが reject されたら警告して終了（`ComputePathToPose goal rejected`）。
-5. 結果の `path.poses` が空なら「計画結果が空（ゴールが障害物内/コストマップ外、
-   または TF 未取得の可能性）」と警告して終了。
-6. 経路が得られたら `plan` トピックへ publish し、点数と `planning_time` をログ出力。
-
-`plan` トピックの QoS は RELIABLE / TRANSIENT_LOCAL / depth=1。TRANSIENT_LOCAL に
-より、後から接続した subscriber にも最新の Path が届く（latched 相当）。これは
-`straight_line_planner` と揃えるための設計。
+かつては自作`plan_requester`が「`goal_pose`購読→`ComputePathToPose`アクション
+呼び出し→`plan`配信」を行っていたが、このノード自体をIssue #50で削除した。
+現在は`bt_navigator`がBT XML側の`<ComputePathToPose goal="{goal}" path="{path}"
+planner_id="GridBased"/>`ノードとして同アクションを直接呼ぶ（詳細は
+`go2_bt_plugins/README.md`参照）。
 
 ### 設計判断の理由
 
-- **`bt_navigator` を使わない**: リカバリ・BT ツリーの複雑さを避け、生M1〜M2 の
-  範囲では「goal → 単一の Path → 追従」の最小フローに集中するため。
+- **（Issue #50で撤回）当初は`bt_navigator`を使わない方針だった**: リカバリ・BT
+  ツリーの複雑さを避け、生M1〜M2の範囲では「goal → 単一の Path → 追従」の最小
+  フローに集中する狙いだったが、接触検知→リカバリの判断ロジックが複雑化したため
+  Issue #50で`nav2_bt_navigator`導入に切り替えた（経緯は`go2_path_following/README.md`
+  「設計の変遷」参照）。
 - **トピックI/F を生M1 と完全一致**: プランナの中身（直線 vs グリッド探索）を
-  下流に一切影響させずに差し替え可能にするため。
+  下流に一切影響させずに差し替え可能にするため（`plan`トピックは可視化用として
+  現在も維持）。
 - **地図トピックを upstream と分離**（`/go2_localization/map`）: 自作の自己位置推定
   スタックが配信する地図を使い、シミュレータ既定の `/robot1/...` と混線させない。
 - **NavFn ダイクストラを既定**: まずは素直な全探索系を基準（ベースライン）として
@@ -267,8 +269,7 @@ map.pgmの画素値では自由空間扱い。`OccupancyGrid`の値体系（自�
   消える）、`-w 1 -t 2` でも届かないことがあり、後続の送信でまとめて届く挙動を
   観測した。`send_goal.sh` は複数回送信にしてあるが、無反応なら
   `ros2 topic echo /plan --qos-durability transient_local --once` で Path の有無を
-  見てもう一度送るのが早い（`plan_requester` のログに `published path` が出れば
-  計画は済んでいる）。
+  見てもう一度送るのが早い（`plan` トピックにPathが出ていれば計画自体は済んでいる）。
 - planner_server が「計画結果が空」を返す場合: ゴールが障害物内（インフレーション
   込み）かコストマップ外。ゴール位置を少しずらす。
 
@@ -277,13 +278,10 @@ map.pgmの画素値では自由空間扱い。`OccupancyGrid`の値体系（自�
 ## 未実施
 
 - MPPI/Smac 系との比較（まずは NavFn ダイクストラを既定とする）。
-- **再計画のトリガ設計**（経路無効化時のみ・1Hz上限、Issue #18の残り）。現状は
-  新しい`goal_pose`受信時にしか計画しないため、Path追従中に新たに現れた障害物には
-  対応できない。`/global_costmap/costmap`(`OccupancyGrid`)を購読して現在のPathが
-  無効化されたかを判定し、無効化時のみ（かつ1Hz上限で）`plan_requester`から
-  再計画を要求する仕組みが必要。継続的な低頻度ポーリングは`plan_follower`が
-  Pathを受け取るたびにFollowPathゴールを再送する仕様（キャンセル→送り直し）のため、
-  無闇に高頻度で再計画すると経路追従がその都度中断されてしまう点に注意
-  （`go2_path_following/README.md`「plan_followerの内部ロジック」参照）
+- **再計画のトリガ設計**（経路無効化時のみ・1Hz上限、Issue #18の残り）。Issue #50で
+  BT化した際、stockの`navigate_to_pose_w_replanning_and_recovery.xml`をそのまま
+  土台にしたため、結果的に`RateController hz="1.0"`により**常時1Hzで再計画**される
+  ようになった（「経路無効化時のみ」に絞る、という当初の設計意図とは違う形で
+  「1Hz上限」の要件だけは満たされている）。再計画を無効化時のみに絞る最適化は未実施。
 - 経路品質の定量評価（障害物配置を変えた成功率・経路長・計画時間）。生M2 完了条件
   の「シミュレーション → 実機」の実機側も未実施。

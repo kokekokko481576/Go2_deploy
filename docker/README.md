@@ -6,17 +6,19 @@ ROS2 Humble + Nav2 + robot_localization + slam_toolbox + Gazebo など、
 
 ## できること / できないこと
 
-Windows(WSL2) 列は #28 のスクリプト整備までは完了し、**実 Windows ハードウェアでの
-検証を進行中**の暫定値（🔍=検証中）。確定したら本表を更新する。
+Windows(WSL2) 列のうち GUI（#29）・sim⇔dev の DDS 疎通（#30）は、2026-07-21 に
+**実 Windows + WSL2 ハードウェアで検証済み**（`/dev/dri` が無い機体でもソフトウェア
+レンダリングでGazebo GUI表示・DDS疎通ともに問題なく確認できた）。実機Go2接続
+（#31）・Isaac Sim の GPU対応（#33）は当面想定しない用途のため未着手のまま。
 
 | 項目 | Ubuntu | macOS | Windows (WSL2) |
 |------|--------|-------|----------------|
-| ROS2 Humble での開発・ビルド（colcon） | ○ | ○ | 🔍 WSL2内Ubuntu 22.04+Docker Engine（Linuxと等価の想定） |
-| Nav2（planner / controller server）の構成・検証 | ○ | ○ | 🔍 同上（sim⇔dev構成で検証中） |
-| Gazebo シミュレーション（新 Gazebo = Fortress。コマンドは `ign gazebo`、`gz` ではない） | ○ iGPU | △ GPU なし・低速 | 🔍 WSLg経由。GPUドライバ次第で D3D12 描画/ソフトレンダリング（#29） |
-| RViz2 などの GUI | ○ ネイティブX11・iGPUでOpenGL 4.6を確認 | △ XQuartz 経由 | 🔍 WSLg（`/tmp/.X11-unix` パススルー、xhost不要の想定）（#29） |
-| Isaac Sim / Isaac Lab | × iGPUのみで不可 | × | × NVIDIA GPU必須。WSL2 GPU対応可否は調査中（#33） |
-| 実機 Go2 との DDS 通信 | ○ `network_mode: host` 有効化済み | △ ホストネットワーク設定に制約 | 🔍 `networkingMode=mirrored`＋Hyper-Vファイアウォール設定が別途必要な見込み（#31） |
+| ROS2 Humble での開発・ビルド（colcon） | ○ | ○ | ○ WSL2内Ubuntu 22.04+Docker Engine（実機検証済み、2026-07-21） |
+| Nav2（planner / controller server）の構成・検証 | ○ | ○ | ○ 同上（sim⇔dev構成のDDS疎通を実機検証済み、#30） |
+| Gazebo シミュレーション（新 Gazebo = Fortress。コマンドは `ign gazebo`、`gz` ではない） | ○ iGPU | △ GPU なし・低速 | ○ WSLg経由でGUI表示を実機確認済み（#29）。`/dev/dri` 無し機体ではソフトウェアレンダリングにフォールバック（`compose.override.yaml.example`使用、動作に問題なし） |
+| RViz2 などの GUI | ○ ネイティブX11・iGPUでOpenGL 4.6を確認 | △ XQuartz 経由 | ○ WSLg（`/tmp/.X11-unix` パススルー、xhost不要）を実機確認済み（#29） |
+| Isaac Sim / Isaac Lab | × iGPUのみで不可 | × | × NVIDIA GPU必須。研究室にWindows+NVIDIA GPU機が無いため未着手（#33） |
+| 実機 Go2 との DDS 通信 | ○ `network_mode: host` 有効化済み | △ ホストネットワーク設定に制約 | 🔍 `networkingMode=mirrored`＋Hyper-Vファイアウォール設定が別途必要な見込み。Windows機からの実機Go2接続は当面想定しないため未着手（#31） |
 
 > **Windows の前提**: WSL2ネイティブ運用（WSL2内にDocker Engineを入れ、WSL2のLinuxシェルから
 > `docker compose` を実行。Docker Desktopは使わない）。リポジトリは必ず WSL2側のLinux
@@ -80,7 +82,8 @@ iGPU機での実機確認で `OpenGl version: 4.6` を確認済み（ソフト�
 
 WSLg 経由で自動的に X11 が通る（`DISPLAY` と `/tmp/.X11-unix` は WSL2 が用意）。
 compose.yaml の Ubuntu 設定がそのまま流用でき、`xhost` は通常不要。
-詳細・トラブルシュートは `docs/手順/Windows-WSL2セットアップ.md` を参照（検証中・#29）。
+実 Windows + WSL2 ハードウェアでGazebo GUI表示を確認済み（2026-07-21、#29）。
+詳細・トラブルシュートは `docs/手順/Windows-WSL2セットアップ.md` を参照。
 
 ### macOS
 

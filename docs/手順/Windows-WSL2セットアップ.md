@@ -51,14 +51,14 @@ Windows機で本リポジトリのsim+dev環境を動かすための手順書。
    
    
 
-4. **Ubuntu(WSL2)のターミナル** で:
+3. **Ubuntu(WSL2)のターミナル** で:
 
    ```bash
    curl -fsSL https://raw.githubusercontent.com/kokekokko481576/Go2_deploy/main/scripts/wsl2-setup.sh | bash
    ```
 
    [OK]/[NG]の自己診断つき。NGが出たら指示に従って解消→再実行(何度でも安全)
-5. **ターミナルを開き直して**:
+4. **ターミナルを開き直して**:
 
    ```bash
    cd ~/Go2_deploy && ./scripts/first-run.sh

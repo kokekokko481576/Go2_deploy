@@ -85,10 +85,12 @@ source install/setup.zsh
 
 | パッケージ | 内容 |
 |-----------|------|
-| [`straight_line_planner`](ros2_ws/src/straight_line_planner) | 経路生成 Phase1 M1。自己位置から目標作業姿勢までの直線補間Pathを出す最小プランナ。Gazebo到達確認済み |
+| [`straight_line_planner`](ros2_ws/src/straight_line_planner) | 経路生成 Phase1 M1。自己位置から目標作業姿勢までの直線補間Pathを出す最小プランナ。既定の自律移動フローからは外れ、単体デバッグ用として残る |
+| [`go2_path_planning`](ros2_ws/src/go2_path_planning) | 経路生成 生M2/M3。Nav2 planner_server(NavFn/ダイクストラ法)+コストマップ(static/obstacle/inflation)の設定・起動一式 |
 | [`cmd_vel_safety`](ros2_ws/src/cmd_vel_safety) | 経路追従 M1。速度・加速度クランプとウォッチドッグ（0.5s）による安全機構 |
 | [`go2_localization`](ros2_ws/src/go2_localization) | 自己位置推定 M1/M2。robot_localization(EKF)+nav2_amcl の設定・起動一式 |
-| [`go2_path_following`](ros2_ws/src/go2_path_following) | 経路追従 M2。Nav2 controller_server(DWB)の最小構成+Path→FollowPathの橋渡しノード |
+| [`go2_path_following`](ros2_ws/src/go2_path_following) | 経路追従 M2。Nav2 controller_server(DWB/MPPI)の最小構成+`goal_pose_bridge`(橋渡し)+`collision_detector`(接触検知)。経路生成→追従→リカバリの統括は`nav2_bt_navigator`(下記`go2_bt_plugins`)に委譲 |
+| [`go2_bt_plugins`](ros2_ws/src/go2_bt_plugins) | 経路追従のBehaviorTree。`nav2_bt_navigator`用カスタム条件ノードと、接触検知リカバリ付きBT XML |
 | [`fake_localization_sensors`](ros2_ws/src/fake_localization_sensors) | Gazebo・実機なしでEKF確認するためのダミーOdometry/IMU Publisher |
 
 ## ドキュメント

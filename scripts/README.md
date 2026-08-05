@@ -33,15 +33,18 @@ cd ~/bridge/Go2_deploy && ./scripts/dev-up.sh
 [1] 自己位置推定 (/go2_localization/tf の供給元)
     1) 実装済み推定 (EKF/AMCL)  ← 既定
     2) 自作 (起動しない。自分で /go2_localization/tf を出す)
-[2] 経路生成の見本(straight_line_planner)を起動する? [Y/n]
+[2] 経路生成 (/plan の供給元)
+    1) 見本: 直線 (straight_line_planner)  ← 既定
+    2) ダイクストラ: NavFn曲線 (go2_path_planning。地図/自己位置推定が前提)
+    3) 起動しない (自作を別途)
 [3] 経路追従(controller_server)を起動する? [Y/n]
 ```
 
 - **自己位置推定を自作する人** → [1] で `2)` を選び、自分の推定が `/go2_localization/tf` を出す。
-- **経路生成が本命の人** → [2] を `n`。自分のプランナを別ターミナルで起動（起動後にコマンド例が出る）。
+- **経路生成が本命の人** → [2] で `3)` を選ぶ。自分のプランナを別ターミナルで起動（起動後にコマンド例が出る）。
 - **経路追従(controller)を改良する人** → [3] を `Y`（or 自分の複製を使うなら `n`）。
 
-`plan_follower`（/plan → 追従命令の橋渡し）と `cmd_vel_safety`（速度の安全弁）は**常時起動**。
+`goal_pose_bridge`（/goal_pose → NavigateToPoseの橋渡し）・`nav2_bt_navigator`/`behavior_server`（経路生成→追従→リカバリの統括、Issue #50）・`cmd_vel_safety`（速度の安全弁）は**常時起動**（旧`plan_follower`は#50で削除済み）。
 
 ### 起動後の流れ
 
@@ -72,7 +75,7 @@ sim は既定で **本家(upstream)Nav2 なし**で起動する（自作の自�
 > **sim と自作スタックを同時に全部動かすと飽和して Gazebo がカクつく**。重いときは、いま作業中の
 > ノード以外を止める・不要な可視化を切るのが効く。詳細は #44。
 
-> **配線（参考）**：`/goal_pose → straight_line_planner(/plan) → plan_follower → controller_server(→/cmd_vel_raw) → cmd_vel_safety(→/robot1/cmd_vel) → ロボット`
+> **配線（参考、Issue #50でBT化した現在の既定構成）**：`/goal_pose → goal_pose_bridge → nav2_bt_navigator → (経路生成: go2_path_planning, 経路追従: controller_server(→/cmd_vel_raw)) → cmd_vel_safety(→/robot1/cmd_vel) → ロボット`
 
 ---
 
