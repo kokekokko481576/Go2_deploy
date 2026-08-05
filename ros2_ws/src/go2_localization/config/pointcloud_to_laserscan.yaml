@@ -14,7 +14,7 @@
       # base_link相対±5cmの狭い帯だと遠方の壁がほぼ拾えず自分の脚・床の近距離ノイズ
       # ばかりになっていた(Issue #26)。浅いチャンネルで数m先の壁を拾えるよう
       # min_heightを大きく下げて帯を広げ、range_minで至近距離ノイズを弾く
-      min_height: -0.0
+      min_height: -0.25
       max_height: 0.05
 
       angle_min: -3.14159265
