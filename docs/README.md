@@ -47,7 +47,9 @@
 (このリポジトリの慣習)。
 
 - [`ros2_ws/src/go2_localization/README.md`](../ros2_ws/src/go2_localization/README.md)
+- [`ros2_ws/src/go2_path_planning/README.md`](../ros2_ws/src/go2_path_planning/README.md)
 - [`ros2_ws/src/go2_path_following/README.md`](../ros2_ws/src/go2_path_following/README.md)
+- [`ros2_ws/src/go2_bt_plugins/README.md`](../ros2_ws/src/go2_bt_plugins/README.md)
 - [`ros2_ws/src/straight_line_planner/README.md`](../ros2_ws/src/straight_line_planner/README.md)
 - [`ros2_ws/src/cmd_vel_safety/README.md`](../ros2_ws/src/cmd_vel_safety/README.md)
 - [`ros2_ws/src/fake_localization_sensors/README.md`](../ros2_ws/src/fake_localization_sensors/README.md)
