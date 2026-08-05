@@ -10,12 +10,13 @@
       target_frame: "base_link"
       transform_tolerance: 0.05
 
-      # 顎LiDARは20°下向き+垂直FOV±15°で全ビームが水平から5〜35°下向きにしかならず、
-      # base_link相対±5cmの狭い帯だと遠方の壁がほぼ拾えず自分の脚・床の近距離ノイズ
-      # ばかりになっていた(Issue #26)。浅いチャンネルで数m先の壁を拾えるよう
-      # min_heightを大きく下げて帯を広げ、range_minで至近距離ノイズを弾く
-      min_height: -0.25
-      max_height: 0.05
+      # Issue #56: 入力(cloud_in、launchファイルでremap)はheight_slice_vizが理論床到達
+      # 距離との比較で床を除去した後の点群(/go2_localization/chin_lidar_scan_points)。
+      # 高さでの二重フィルタを避けるため、ここではheight_slice_viz側のmax_height(0.3)を
+      # 覆うくらい広く取り、実質「床除去済みの点群の中から角度ごとに最も近い点を採用する」
+      # だけの役割にする。至近距離の自己ノイズ(脚等)はrange_minで別途弾く
+      min_height: -2.0
+      max_height: 1.0
 
       angle_min: -3.14159265
       angle_max: 3.14159265
@@ -27,9 +28,10 @@
       use_inf: true
       concurrency_level: 1
 
-  # height_slice_vizのみで使う(AMCL本体が使うpointcloud_to_laserscanノードには無関係)。
-  # 単純な高さレンジではなく、レイごとの理論上の床到達距離との比較で床を除去する
-  # 方式に変更した(Issue #26)。詳細はhigh_slice_viz.pyのdocstring参照
+  # height_slice_viz: 単純な高さレンジではなく、レイごとの理論上の床到達距離との比較で
+  # 床を除去する(Issue #26)。この出力(chin_lidar_scan_points)はAMCL本体が使う
+  # pointcloud_to_laserscanのcloud_inにもなっている(Issue #56)。詳細は
+  # height_slice_viz.pyのdocstring参照
   height_slice_viz:
     ros__parameters:
       use_sim_time: true
@@ -38,6 +40,6 @@
       # (前方0.5〜2.0mで一貫してz=-0.26〜-0.28だった)から-0.27とした
       floor_z: -0.27
       # 理論上の床到達距離より、これ以上手前で反射していれば障害物とみなすマージン
-      floor_margin: 0.15
+      floor_margin: 0.3
       # 参考程度の粗い上限(天井反射等の除外用)
       max_height: 0.3

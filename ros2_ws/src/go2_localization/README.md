@@ -5,8 +5,10 @@
 
 このパッケージの本体は「既存パッケージ（`robot_localization`・`pointcloud_to_laserscan`・
 `nav2_amcl`・`nav2_map_server`）の設定ファイル（yaml）+起動ファイル（launch.py）」だけで
-構成されている。唯一の自作ノード `height_slice_viz` はAMCLの推定パイプラインには関与しない、
-デバッグ可視化専用のもの（詳細は「詳細 > height_slice_viz」節）。
+構成されている。唯一の自作ノード `height_slice_viz` は、単純な高さレンジでは床と壁を
+原理的に区別できない問題（Issue #26）に対する床除去フィルタ。元はデバッグ可視化専用
+だったが、Issue #56でAMCL本体が使う`pointcloud_to_laserscan`の入力にも採用した
+（詳細は「詳細 > height_slice_viz」節）。
 
 ---
 
@@ -48,8 +50,12 @@ ros2 topic echo /go2_localization/amcl_pose            # AMCLの推定姿勢（m
 
 Fixed Frame を `map` にして、以下を追加すると、パーティクル雲や推定姿勢が見える:
 
-- `/go2_localization/chin_lidar_scan_points`（`PointCloud2`、床除去済み。height_slice_viz出力）
-- `/go2_localization/particlecloud`（`PoseArray`）
+- `/go2_localization/chin_lidar_scan_points`（`PointCloud2`、床除去済み。height_slice_viz出力。
+  可視化用途に加え、`pointcloud_to_laserscan`の入力そのものでもある、Issue #56）
+- `/particle_cloud`（`nav2_msgs/ParticleCloud`。`amcl.launch.py`の`particlecloud`→
+  `/go2_localization/particlecloud`remapは、このNav2バージョンの実際のトピック名
+  `particle_cloud`(アンダースコア入り)と一致しておらず効いていない。素の`/particle_cloud`
+  を見る必要がある。remap自体の修正は別issue)
 - `/go2_localization/amcl_pose`（`PoseWithCovarianceStamped`）
 
 > **注意**: `/go2_localization/chin_lidar_scan` は `LaserScan` 型だが、この環境では
@@ -131,9 +137,9 @@ publishしてAMCLに再指定させる。共分散はRVizの2D Pose Estimateと�
 | 計画 | 役割 | 使う既存パッケージ | 出力 |
 |------|------|--------------------|------|
 | 自M1 | 脚オドメトリ+IMUのEKF融合（連続的なローカル推定 `odom→base_link`） | `robot_localization`（`ekf_node`） | `/go2_localization/odometry/filtered` + TF `odom→base_link` |
-| 自M2 前段 | 顎3D LiDAR点群 → 2D `LaserScan` 変換 | `pointcloud_to_laserscan` | `/go2_localization/chin_lidar_scan` |
+| 自M2 前段a | 理論床到達距離との比較で床を除去(Issue #26/#56) | 自作 `height_slice_viz` | `/go2_localization/chin_lidar_scan_points` |
+| 自M2 前段b | 床除去済み点群 → 2D `LaserScan` 変換 | `pointcloud_to_laserscan` | `/go2_localization/chin_lidar_scan` |
 | 自M2 | 地図とスキャンのマッチングで絶対位置推定（`map→odom` 補正） | `nav2_amcl` / `nav2_map_server` | `/go2_localization/amcl_pose` + TF `map→odom` |
-| 補助 | 床除去済み点群のデバッグ可視化（推定には非関与） | 自作 `height_slice_viz` | `/go2_localization/chin_lidar_scan_points` |
 
 役割分担: EKF が `odom→base_link` の連続的なローカル推定を担い、AMCL が `map→odom` の
 絶対位置補正を担う。両者を合わせて `map→odom→base_link` の完結したTFツリーができる。
@@ -146,19 +152,25 @@ publishしてAMCLに再指定させる。共分散はRVizの2D Pose Estimateと�
   /robot1/imu_plugin/out ─────┼──▶ ekf_filter_node ──▶ /go2_localization/odometry/filtered
                               │         └──▶ TF: odom→base_link  ┐
                               │                                   │
-  /robot1/chin_lidar/scan/points ─┬─▶ pointcloud_to_laserscan ──▶ /go2_localization/chin_lidar_scan
-                                  │      (target_frame=base_link,        (LaserScan)         │
-                                  │       /robot1/tf を参照)                                  ▼
-                                  │                                                    ┌──────────┐
-  map_server ──▶ /go2_localization/map ─────────────────────────────────────────────▶│   amcl   │
-                                  │                     TF: odom→base_link ───────────▶│          │
-                                  │                                                    └────┬─────┘
-                                  │           /go2_localization/amcl_pose  ◀─────────────────┤
-                                  │           /go2_localization/particlecloud  ◀─────────────┤
-                                  │           TF: map→odom  ◀───────────────────────────────┘
-                                  │
-                                  └─▶ height_slice_viz ──▶ /go2_localization/chin_lidar_scan_points
-                                         (床除去・デバッグ可視化専用、PointCloud2)
+  /robot1/chin_lidar/scan/points ──▶ height_slice_viz ──▶ /go2_localization/chin_lidar_scan_points
+     (target_frame=base_link,        (理論床到達距離との比較で        │  (PointCloud2、床除去済み。
+      /robot1/tf を参照)               床を除去。Issue #26/#56)        │   RViz可視化にも使う)
+                                                                       ▼
+                                                        pointcloud_to_laserscan
+                                                        (床除去済み点群の中から角度ごとに
+                                                         最も近い点を採用するだけ)
+                                                                       │
+                                                                       ▼
+                                                      /go2_localization/chin_lidar_scan (LaserScan)
+                                                                       │
+                                                                       ▼
+                                                                ┌──────────┐
+  map_server ──▶ /go2_localization/map ─────────────────────▶│   amcl   │
+                                    TF: odom→base_link ───────▶│          │
+                                                                └────┬─────┘
+                                             /go2_localization/amcl_pose  ◀───┤
+                                             /particle_cloud  ◀───────────────┤
+                                             TF: map→odom  ◀──────────────────┘
 ```
 
 EKF が配信する `odom→base_link` と AMCL が配信する `map→odom` は、どちらも
@@ -175,7 +187,7 @@ EKF が配信する `odom→base_link` と AMCL が配信する `map→odom` は
 | 出力 | `/go2_localization/odometry/filtered` | `nav_msgs/Odometry` | 自EKFの推定 |
 | 出力 | `/go2_localization/chin_lidar_scan` | `sensor_msgs/LaserScan` | 顎LiDAR→2Dスキャン |
 | 出力 | `/go2_localization/amcl_pose` | `geometry_msgs/PoseWithCovarianceStamped` | AMCL推定姿勢（mapフレーム） |
-| 出力 | `/go2_localization/particlecloud` | `geometry_msgs/PoseArray` | 全パーティクル群 |
+| 出力 | `/particle_cloud`(注) | `nav2_msgs/ParticleCloud` | 全パーティクル群。remapが効いていないため`/go2_localization/`配下ではない(下記「RViz2で見る」節参照) |
 | 出力 | `/go2_localization/map` | `nav_msgs/OccupancyGrid` | 地図（map_server） |
 | 出力 | `/go2_localization/chin_lidar_scan_points` | `sensor_msgs/PointCloud2` | 床除去済み点群（デバッグ） |
 | 入力 | `/go2_localization/initialpose` | `geometry_msgs/PoseWithCovarianceStamped` | 初期姿勢の再指定（`set_initial_pose.sh`） |
@@ -334,9 +346,11 @@ ekf_node = Node(
 - `/tf_static` → `/robot1/tf_static`: 静止TF（センサ位置等）は自分では配信せず、
   引き続きupstream（robot_state_publisher）を読みに行く
 
-### pointcloud_to_laserscan（`config/…yaml` + `launch/…launch.py`）— 自M2前段
+### pointcloud_to_laserscan（`config/…yaml` + `launch/…launch.py`）— 自M2前段b
 
-顎3D LiDARの点群（`PointCloud2`）を、AMCLが読める2D `LaserScan` に変換するノード。
+`height_slice_viz`が床除去した後の点群（`PointCloud2`）を、AMCLが読める2D `LaserScan`
+に変換するノード（Issue #56以前は生の顎LiDAR点群を直接受けていた。下記「詳細 >
+height_slice_viz」参照）。
 
 ```yaml
 /**:
@@ -346,8 +360,8 @@ ekf_node = Node(
       target_frame: "base_link"
       transform_tolerance: 0.05
 
-      min_height: -0.0
-      max_height: 0.05
+      min_height: -2.0
+      max_height: 1.0
 
       angle_min: -3.14159265
       angle_max: 3.14159265
@@ -364,12 +378,17 @@ ekf_node = Node(
   なる。`base_link` に変換してから輪切りにすることで傾きを補正する（Issue #26）。
   この設定のためこのノードはTFを必要とし、launch側で `/robot1/tf`・`/robot1/tf_static` を
   参照する
-- `min_height` / `max_height`: `base_link` 相対でこの高さ帯（−0.0〜0.05m）にある点だけを
-  2Dスキャンに採用する。顎LiDARは20°下向き+垂直FOV±15°で全ビームが水平から5〜35°下向きに
-  しかならず、狭い帯だと遠方の壁が拾えず自分の脚・床の近距離ノイズばかりになっていた（Issue #26）
+- `min_height` / `max_height`: 入力が単純な高さレンジではなく`height_slice_viz`側で
+  理論床到達距離との比較で既に床除去されているため（Issue #56）、ここでの高さフィルタは
+  二重適用を避けて広めに取り（`height_slice_viz`の`max_height`を覆う範囲）、実質「床除去済み
+  点群の中から角度ごとに最も近い点を採用する」だけの役割にしている。単純な高さレンジで
+  床と壁を区別しようとしていた旧設定（`-0.0〜0.05m`ではあるが実際は`-0.25`にすべきだったのが
+  誤って`-0.0`のままregressionしていた、Issue #26の対応漏れ）は#56で刷新した
 - `angle_min`〜`angle_increment`: 出力する2Dスキャンの角度範囲（−180°〜+180°、全周）と
   角度分解能（約0.5°刻み、`0.0087` rad）
-- `range_min: 0.4`: 脚（0.13〜0.3m）の近距離ノイズを除外するため 0.1 から引き上げた（Issue #26）
+- `range_min: 0.4`: 脚（0.13〜0.3m）の近距離ノイズを除外するため 0.1 から引き上げた（Issue #26）。
+  `height_slice_viz`は床除去はするが至近距離の自己反射(脚等)は除外しないため、このrange_minが
+  今も必要
 - `use_inf: true`: 障害物が無い方向は `inf`（無限遠）として表現する（AMCL・Nav2の標準的な扱い）
 
 ```python
@@ -377,14 +396,15 @@ p2l_node = Node(
     package='pointcloud_to_laserscan', executable='pointcloud_to_laserscan_node',
     name='pointcloud_to_laserscan', parameters=[p2l_config],
     remappings=[
-        ('cloud_in', '/robot1/chin_lidar/scan/points'),
+        ('cloud_in', '/go2_localization/chin_lidar_scan_points'),
         ('scan', '/go2_localization/chin_lidar_scan'),
         ('/tf', '/robot1/tf'),
         ('/tf_static', '/robot1/tf_static'),
     ],
 )
 ```
-- `cloud_in` → `/robot1/chin_lidar/scan/points`: 標準の入力トピック名を実際の顎LiDAR点群につなぐ
+- `cloud_in` → `/go2_localization/chin_lidar_scan_points`: 生の顎LiDAR点群ではなく、
+  `height_slice_viz`が床除去した後の点群につなぐ（Issue #56）
 - `scan` → `/go2_localization/chin_lidar_scan`: 標準の出力トピック名を自分専用に変える
   （upstream側の2D LiDAR由来の `/robot1/scan` と混ざらないように）
 - `/tf`・`/tf_static` → `/robot1/…`: `target_frame: base_link` への変換に必要なTFを
@@ -533,7 +553,7 @@ free_thresh: 0.25         # これ以下を自由空間とみなす
 - `map_server` が起動時にこのyaml（と隣の `cafe_world_map.pgm`）を読み、
   `/go2_localization/map`（`OccupancyGrid`）として配信する
 
-### height_slice_viz（`go2_localization/height_slice_viz.py` + launch）— デバッグ可視化
+### height_slice_viz（`go2_localization/height_slice_viz.py` + launch）— 床除去 + デバッグ可視化
 
 #### なぜ必要か（Issue #26関連）
 
@@ -557,9 +577,18 @@ free_thresh: 0.25         # これ以下を自由空間とみなす
 届いたとしたら何m先になるかを逆算し、実際の反射距離がそれより `floor_margin` 以上手前なら
 「床の手前に何かある」=障害物、理論距離付近〜以遠なら床、と判定して床側を除去する。結果は
 `LaserScan` に変換せず **`PointCloud2` のまま** `/go2_localization/chin_lidar_scan_points` に
-出力する。AMCL本体が使う `pointcloud_to_laserscan` のパイプラインには一切手を加えず、
-可視化専用の経路を並行して追加しただけの位置づけ（将来的に効果が確認できたらAMCL側の
-`pointcloud_to_laserscan` をこの床除去ロジックを持つ自作ノードに置き換えることも検討）。
+出力する。
+
+**当初(Issue #26)はRViz可視化専用の経路で、AMCL本体が使う`pointcloud_to_laserscan`には
+一切繋がっていなかった。Issue #56でAMCL本体の入力としても採用し、`pointcloud_to_laserscan`
+の`cloud_in`をこのノードの出力にremapした**(launch/pointcloud_to_laserscan.launch.py参照)。
+
+**既知の残課題(Issue #56)**: `floor_margin`を広げても(0.15→0.3)、特定のビーム角度で
+理論床到達距離との比較がわずかに外れ、床由来の点がまれに障害物として残ることを確認した。
+この漏れはロボットのXY位置を変えても同じ距離で再現する(=環境ではなくセンサの取り付け角度・
+高さだけで決まる、床除去の数式か3D LiDARの16ch離散化のどちらかに起因する)ため、その方向の
+ビンで本物の障害物より近い"床"が優先され、本来検出できるはずの障害物を隠してしまう可能性が
+残っている。原因の特定・修正は未完了。
 
 実装上のポイント（`height_slice_viz.py`）:
 - `tf2_ros.Buffer` で `target_frame` への変換（平行移動+回転）を取得。平行移動成分がそのまま
@@ -580,7 +609,7 @@ free_thresh: 0.25         # これ以下を自由空間とみなす
 |-----------|---------|--------------------|------|
 | `target_frame` | `"base_link"` | `base_link` | 点群の変換先フレーム |
 | `floor_z` | `-0.27` | `-0.3` | 床の高さ（`target_frame` 相対）。cafe_worldの平地で静止スキャンした実測（前方0.5〜2.0mで一貫してz=−0.26〜−0.28）から−0.27 |
-| `floor_margin` | `0.15` | `0.1` | 理論上の床到達距離より、これ以上手前で反射していれば障害物とみなすマージン |
+| `floor_margin` | `0.3` | `0.1` | 理論上の床到達距離より、これ以上手前で反射していれば障害物とみなすマージン(Issue #56で0.15→0.3に拡大したが、残課題は上記参照) |
 | `max_height` | `0.3` | `0.3` | 天井反射等を除く粗い上限 |
 
 （yamlの値が優先。ノード内 `declare_parameter` のデフォルトは launch を介さず単体実行した場合の値）
@@ -599,8 +628,12 @@ free_thresh: 0.25         # これ以下を自由空間とみなす
 
 ## 未実施・既知の注意点
 
-- ロボットが静止した状態でのみ確認。実際に歩かせながらの精度・収束の確認はこれから
-  （issue #10のドリフト計測、issue #13の地図比較へ続く）
+- ロボットが静止した状態での疎通確認（本節）に加え、実際に歩かせた状態での定量計測も
+  GATE1（Issue #36）で50試行実施済み。ただしGazebo真値との比較（Issue #43）で、
+  **推定ベースの到達成功率46%のうち大半が真値では未到達の偽陽性**（真値ベースの
+  成功率は6%）と判明した。主因は試行間でリセットせず走らせ続けたことによる
+  **セッション内での自己位置推定ドリフトの蓄積**（Issue #54、対策中）。ドリフト率
+  そのものの実測（issue #10）、地図比較（issue #13）は依然これから
 - Humble（dev）⇔Jazzy（sim）間のCycloneDDS警告（`invalid data size` /
   `string data is not null-terminated`）が出るが、既知の相性問題として issue #7で追跡中。
   値そのものは正しく届いている
