@@ -16,7 +16,10 @@ def generate_launch_description():
         output='screen',
         parameters=[p2l_config],
         remappings=[
-            ('cloud_in', '/robot1/chin_lidar/scan/points'),
+            # Issue #56: 生の3D点群ではなく、height_slice_vizが理論床到達距離との比較で
+            # 床を除去した後の点群を使う(単純な高さレンジだけでは床と壁を区別できない、
+            # Issue #26)。height_slice_vizはlocalization.launch.pyで同時に起動される
+            ('cloud_in', '/go2_localization/chin_lidar_scan_points'),
             ('scan', '/go2_localization/chin_lidar_scan'),
             ('/tf', '/robot1/tf'),
             ('/tf_static', '/robot1/tf_static'),
