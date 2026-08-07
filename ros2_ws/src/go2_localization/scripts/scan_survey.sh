@@ -23,7 +23,11 @@ for p in "${POINTS[@]}"; do
   docker exec go2-sim bash -c "source /opt/ros/jazzy/setup.bash 2>/dev/null && gz service -s /world/default/set_pose --reqtype gz.msgs.Pose --reptype gz.msgs.Boolean --timeout 2000 --req \"name: 'robot1_my_bot', position: {x: ${x}, y: ${y}, z: 0.46}, orientation: {x: 0, y: 0, z: 0, w: 1}\"" > /dev/null 2>&1 || true
   sleep 1.5
 
-  docker exec arbeit-ros2 bash -c "source /opt/ros/humble/setup.bash && source /home/ros/ros2_ws/install/setup.bash && timeout 4 ros2 topic echo /go2_localization/chin_lidar_scan --once 2>/dev/null" > "$TMP_SCAN" 2>/dev/null || true
+  # --full-length: ros2 topic echoは既定でrangesを先頭128要素+'...'に切り詰める
+  # (--truncate-length既定値128)。723要素あるこのスキャンで付けないと先頭129要素
+  # (全周のうち後方寄りの一部)しか見えず、前方2m以内の反射を誤って「無い」と判定する
+  # (Issue #56調査時にこれで誤診断していたことが判明)
+  docker exec arbeit-ros2 bash -c "source /opt/ros/humble/setup.bash && source /home/ros/ros2_ws/install/setup.bash && timeout 4 ros2 topic echo /go2_localization/chin_lidar_scan --once --full-length 2>/dev/null" > "$TMP_SCAN" 2>/dev/null || true
 
   python3 - "$label" "$x" "$y" "$TMP_SCAN" <<'PYEOF'
 import sys, yaml, math
