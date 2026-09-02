@@ -626,6 +626,61 @@ free_thresh: 0.25         # これ以下を自由空間とみなす
 - `/go2_localization/amcl_pose` が実データ（frame_id: map）で配信されることを確認。
   起動直後に1回だけ tf キャッシュ待ちのdropが出るが自然に解消する
 
+## 実機向け(未検証・下ごしらえ、2026-09-02追加)
+
+`計画/自己位置推定.md` M1/M2(実機)・Issue #10/#13/#67 向けに、実機データが来たら
+すぐ「クソ雑map」作りに着手できるよう用意した一式。**実機接続(Issue #3)がまだ検証
+できていないため、以下は一度も実機/実データで動かしていない。** 初回接続時に
+トピック名・TFが本当にこの想定通りか確認すること。
+
+### 構成
+
+sim版と同じEKF→height_slice_viz→pointcloud_to_laserscanのチェーンを流用し、
+AMCL(既知地図が要る)の代わりにslam_toolbox(地図を作りながら自己推定する)を使う。
+sim版との対応:
+
+| 役割 | sim版 | 実機版(今回追加) |
+|------|-------|-------------------|
+| 生オドメトリ・IMU | upstream(`/robot1/odometry/filtered`等) | driverコンテナの`go2_sport_bridge state_to_odom_imu_node`(`sportmodestate`→Odometry/Imu変換、下記) |
+| 顎LiDAR点群 | `/robot1/chin_lidar/scan/points` | `/utlidar/cloud`(実機ファームウェアが直接配信、`unitree_ros2/README.md`参照。frame_id: `utlidar_lidar`) |
+| base_link↔LiDARの静的TF | robot_state_publisher(sim URDF) | `static_tf_real.launch.py`(下記の仮値) |
+| 地図とのマッチング | AMCL(`amcl.launch.py`、既知地図が前提) | slam_toolbox(`slam_real.launch.py`、地図を作りながら推定) |
+| namespace分離(`/go2_localization/tf`) | 必要(upstream Nav2と衝突するため) | 不要(実機側に競合する上位Nav2が無いため素の`/tf`を使う) |
+
+### 未検証の前提(実機到着後に必ず確認)
+
+- `state_to_odom_imu_node`: `SportModeState.velocity`が機体座標系(child_frame_id=base_link
+  相当)である前提、IMUの実搭載位置をbase_link近似としている点
+- `static_tf_real.launch.py`のLiDAR搭載オフセット(`xyz=0.29 0 -0.06, rpy=0 0.35 0`)は
+  `go2_description/xacro/robot.xacro`の`chin_lidar_joint`にある**sim用の仮値をそのまま
+  流用**しただけ(コメントに「実機の正確な搭載位置を計測でき次第、更新すること」とある)。
+  実機で目視・実測して更新する
+- `/utlidar/cloud`の型・frame_idが`unitree_ros2/README.md`記載どおりか(`rviz2`で
+  `Fixed Frame: utlidar_lidar`にして確認、と手順が書かれている)
+
+### 使い方(実機接続後)
+
+```bash
+# driverコンテナ: 実機/utlidar/cloud・sportmodestateを購読できる状態にしてから
+docker compose exec driver ros2 run go2_sport_bridge state_to_odom_imu_node
+
+# devコンテナ: 地図作成
+cd ~/ros2_ws && colcon build --symlink-install --packages-select go2_localization
+source install/setup.bash
+ros2 launch go2_localization mapping_real.launch.py
+```
+
+歩かせながら`ros2 topic echo /go2_localization/amcl_pose`ならぬ、RViz2で
+`Fixed Frame: map`にして`/map`(slam_toolboxの出力)の広がりを見る。一通り回ったら別ターミナルで:
+
+```bash
+ros2 run nav2_map_server map_saver_cli -f <保存先パス> \
+  --ros-args -p save_map_timeout:=5.0 -r map:=/go2_localization/map
+```
+
+保存したpgm/yamlを`config/map/`に置き、`amcl.yaml`の地図パスをそちらに差し替えれば
+実機マップに対するAMCL稼働(実機M2)に進める。
+
 ## 未実施・既知の注意点
 
 - ロボットが静止した状態での疎通確認（本節）に加え、実際に歩かせた状態での定量計測も

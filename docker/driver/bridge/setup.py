@@ -17,12 +17,14 @@ setup(
     maintainer_email='koga_koichiro@naoe.eng.osaka-u.ac.jp',
     description=(
         'cmd_velをGo2 Sport Mode APIのMove命令へ変換する中継ノード'
+        '(逆方向: sportmodestateをOdometry/Imuへ変換する中継ノードも含む)'
     ),
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'cmd_vel_to_sport_node = go2_sport_bridge.cmd_vel_to_sport_node:main',
+            'state_to_odom_imu_node = go2_sport_bridge.state_to_odom_imu_node:main',
         ],
     },
 )
