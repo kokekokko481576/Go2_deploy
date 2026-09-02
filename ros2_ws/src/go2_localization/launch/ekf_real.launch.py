@@ -25,9 +25,8 @@ def generate_launch_description():
             ('imu_plugin/out', '/go2_state_bridge/imu'),
             ('odometry/filtered', '/go2_localization/odometry/filtered'),
             # 実機側にはsimの/robot1名前空間・上位Nav2スタックが無いため、
-            # namespace分離(sim版の/go2_localization/tf)は不要。素の/tfへ配信する
-            ('/tf', '/tf'),
-            ('/tf_static', '/tf_static'),
+            # namespace分離(sim版の/go2_localization/tf)は不要。remapせず既定の
+            # /tf・/tf_staticへそのまま配信する
         ],
     )
 

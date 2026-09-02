@@ -22,9 +22,7 @@ def generate_launch_description():
             # 実機ファームウェアが直接配信する点群(unitree_ros2 README「utlidar/cloud」)
             ('cloud_in', '/utlidar/cloud'),
             ('cloud_filtered', '/go2_localization/chin_lidar_scan_points'),
-            # 実機側にはsimの/robot1名前空間が無いため素の/tf・/tf_staticを使う
-            ('/tf', '/tf'),
-            ('/tf_static', '/tf_static'),
+            # 実機側にはsimの/robot1名前空間が無いため、remapせず既定の/tf・/tf_staticを使う
         ],
     )
 

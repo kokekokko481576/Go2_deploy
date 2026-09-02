@@ -110,6 +110,10 @@ MAP_YAML_HOST=""
 if [ "$USE_LOC" = true ]; then
     MAP_DIR="ros2_ws/src/go2_localization/config/map"
     mapfile -t MAP_CHOICES < <(find "$MAP_DIR" -maxdepth 1 -name '*.yaml' | sort)
+    if [ "${#MAP_CHOICES[@]}" -eq 0 ]; then
+        echo "[NG] $MAP_DIR に地図yamlが見つかりません(cafe_world_map.yamlが消えている?)"
+        exit 1
+    fi
     echo "  地図を選んでください(AMCLのmap_serverに渡す):"
     i=1
     for m in "${MAP_CHOICES[@]}"; do

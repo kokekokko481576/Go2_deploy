@@ -5,8 +5,35 @@ from sensor_msgs.msg import Imu
 from unitree_go.msg import SportModeState
 
 # Unitree IMUState.quaternion は [w, x, y, z] 順
-# (external/unitree_ros2/example/src/src/read_low_state.cpp のログ出力順で確認)。
+# (external/unitree_ros2/example/src/src/read_low_state.cpp のログ出力順で確認。
+#  gitサブモジュールなので `git submodule update --init` していないと手元には無い)。
 # ROS2 geometry_msgs/Quaternion は (x, y, z, w) 順なので並べ替えが要る。
+
+# 以下は実測していない仮の対角共分散(REP-103の「未知」を表す-1にはしない=EKFに
+# 使わせる)。全ゼロのままpublishすると`robot_localization`が「完全に確信度100%の
+# 観測」と解釈し、他の入力より過剰に信用してしまう。実機到着後、実際のばらつきを
+# 見て調整すること
+_POSITION_VARIANCE = 0.01   # (m^2)
+_YAW_VARIANCE = 0.05        # (rad^2)
+_VELOCITY_VARIANCE = 0.01   # (m/s)^2 または (rad/s)^2
+_ORIENTATION_VARIANCE = 0.05     # (rad^2)
+_ANGULAR_VELOCITY_VARIANCE = 0.02   # (rad/s)^2
+_LINEAR_ACCEL_VARIANCE = 0.1        # (m/s^2)^2
+
+
+def _diag6(vx, vy, vz, vroll, vpitch, vyaw):
+    cov = [0.0] * 36
+    for i, v in enumerate((vx, vy, vz, vroll, vpitch, vyaw)):
+        cov[i * 6 + i] = v
+    return cov
+
+
+def _diag3(v0, v1, v2):
+    cov = [0.0] * 9
+    cov[0] = v0
+    cov[4] = v1
+    cov[8] = v2
+    return cov
 
 
 class StateToOdomImuNode(Node):
@@ -53,6 +80,12 @@ class StateToOdomImuNode(Node):
         odom.twist.twist.linear.y = float(msg.velocity[1])
         odom.twist.twist.linear.z = float(msg.velocity[2])
         odom.twist.twist.angular.z = float(msg.yaw_speed)
+        odom.pose.covariance = _diag6(
+            _POSITION_VARIANCE, _POSITION_VARIANCE, _POSITION_VARIANCE,
+            _YAW_VARIANCE, _YAW_VARIANCE, _YAW_VARIANCE)
+        odom.twist.covariance = _diag6(
+            _VELOCITY_VARIANCE, _VELOCITY_VARIANCE, _VELOCITY_VARIANCE,
+            _VELOCITY_VARIANCE, _VELOCITY_VARIANCE, _VELOCITY_VARIANCE)
         self._odom_pub.publish(odom)
 
         imu = Imu()
@@ -62,12 +95,18 @@ class StateToOdomImuNode(Node):
         imu.orientation.y = float(qy)
         imu.orientation.z = float(qz)
         imu.orientation.w = float(qw)
+        imu.orientation_covariance = _diag3(
+            _ORIENTATION_VARIANCE, _ORIENTATION_VARIANCE, _ORIENTATION_VARIANCE)
         imu.angular_velocity.x = float(msg.imu_state.gyroscope[0])
         imu.angular_velocity.y = float(msg.imu_state.gyroscope[1])
         imu.angular_velocity.z = float(msg.imu_state.gyroscope[2])
+        imu.angular_velocity_covariance = _diag3(
+            _ANGULAR_VELOCITY_VARIANCE, _ANGULAR_VELOCITY_VARIANCE, _ANGULAR_VELOCITY_VARIANCE)
         imu.linear_acceleration.x = float(msg.imu_state.accelerometer[0])
         imu.linear_acceleration.y = float(msg.imu_state.accelerometer[1])
         imu.linear_acceleration.z = float(msg.imu_state.accelerometer[2])
+        imu.linear_acceleration_covariance = _diag3(
+            _LINEAR_ACCEL_VARIANCE, _LINEAR_ACCEL_VARIANCE, _LINEAR_ACCEL_VARIANCE)
         self._imu_pub.publish(imu)
 
 

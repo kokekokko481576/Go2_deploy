@@ -20,9 +20,7 @@ def generate_launch_description():
         remappings=[
             ('cloud_in', '/go2_localization/chin_lidar_scan_points'),
             ('scan', '/go2_localization/chin_lidar_scan'),
-            # 実機側にはsimの/robot1名前空間が無いため素の/tf・/tf_staticを使う
-            ('/tf', '/tf'),
-            ('/tf_static', '/tf_static'),
+            # 実機側にはsimの/robot1名前空間が無いため、remapせず既定の/tf・/tf_staticを使う
         ],
     )
 
