@@ -1,5 +1,4 @@
 import rclpy
-from builtin_interfaces.msg import Time
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from sensor_msgs.msg import Imu
@@ -64,9 +63,12 @@ class StateToOdomImuNode(Node):
     未検証(実機到着後に確認すること):
     - SportModeState.velocityが機体座標系(child_frame_id=base_link相当)であるという前提
     - IMUの実搭載位置とbase_linkのズレ(frame_idはbase_link近似で代用)
-    - msg.stamp(ファームウェア側の実測時刻)がROS2の壁時計(use_sim_time: false)と
-      同じ基準か。ずれている場合、他ノード(height_slice_viz等、ROS受信時刻ベース)との
-      タイムスタンプ不整合でtf2のtransform_tolerance超過が起きる可能性がある
+    - header.stampにmsg.stamp(ファームウェア側の実測時刻)ではなくノード受信時刻
+      (self.get_clock().now())を使っている。ファームウェアのクロックがROS2の壁時計
+      (use_sim_time: false)と同じ基準か不明な段階では、対応が取れずtf2の
+      transform_toleranceを全滅させるリスクの方が大きいと判断した(受信時刻ベースの
+      弱点は精度の甘さだけで済む)。実機で両者のクロックが揃っていると確認できたら
+      msg.stampに切り替えるとdt精度が上がる
     """
 
     def __init__(self):
@@ -74,18 +76,18 @@ class StateToOdomImuNode(Node):
 
         self._odom_pub = self.create_publisher(Odometry, '/go2_state_bridge/odom', 10)
         self._imu_pub = self.create_publisher(Imu, '/go2_state_bridge/imu', 10)
-        self.create_subscription(SportModeState, 'sportmodestate', self._on_state, 10)
+        # 'lf'(low frequency)版を購読する。EKF/マッピング用途には高頻度版
+        # 'sportmodestate'は過剰(unitree_ros2/README.md「lf/sportmodestate」参照)
+        self.create_subscription(SportModeState, 'lf/sportmodestate', self._on_state, 10)
 
         self.get_logger().info(
-            'state_to_odom_imu ready: sportmodestate -> '
+            'state_to_odom_imu ready: lf/sportmodestate -> '
             '/go2_state_bridge/odom (nav_msgs/Odometry) + '
             '/go2_state_bridge/imu (sensor_msgs/Imu)'
         )
 
     def _on_state(self, msg: SportModeState):
-        # ノード受信時刻ではなく、ファームウェア側の実測時刻(msg.stamp)を使う。
-        # TimeSpecはbuiltin_interfaces/Timeとフィールド名(sec/nanosec)が一致している
-        stamp = Time(sec=msg.stamp.sec, nanosec=msg.stamp.nanosec)
+        stamp = self.get_clock().now().to_msg()
         qw, qx, qy, qz = msg.imu_state.quaternion
 
         odom = Odometry()
