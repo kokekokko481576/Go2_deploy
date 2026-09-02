@@ -1,8 +1,9 @@
 """Issue #56のPR #57レビューで指摘された、height_slice_vizの`_obstacle_mask`
 (理論床到達距離との比較による床除去)に対する単体テスト。
 
-`_obstacle_mask`はself.floor_z/floor_margin/max_heightの3属性しか参照しないため、
-rclpy.init()やNode継承を経由せず、この3属性だけを持つスタブを`self`として渡して
+`_obstacle_mask`はself.floor_z/floor_margin/max_height/body_exclude_min_x/
+body_exclude_max_x/body_exclude_min_y/body_exclude_max_y の7属性しか参照しないため、
+rclpy.init()やNode継承を経由せず、この7属性だけを持つスタブを`self`として渡して
 直接呼び出せる。
 """
 import numpy as np
