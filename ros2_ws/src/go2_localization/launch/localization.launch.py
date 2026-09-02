@@ -6,14 +6,15 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
+from go2_localization import default_map_yaml_path
+
 
 def generate_launch_description():
     pkg_share = get_package_share_directory('go2_localization')
     launch_dir = os.path.join(pkg_share, 'launch')
-    default_map_yaml = os.path.join(pkg_share, 'config', 'map', 'cafe_world_map.yaml')
 
     map_yaml_arg = DeclareLaunchArgument(
-        'map_yaml', default_value=default_map_yaml,
+        'map_yaml', default_value=default_map_yaml_path(),
         description='AMCLのmap_serverに渡す地図yamlの絶対パス(既定: cafe_world_map)',
     )
 

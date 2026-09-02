@@ -41,6 +41,8 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+from go2_localization import default_map_yaml_path
+
 _THIS_DIR = os.path.dirname(os.path.realpath(__file__))
 
 # フェーズB: 経路生成・controller・BTとも自作TFを参照する。素の/tfには誰も配信しないため必須。
@@ -58,7 +60,6 @@ def generate_launch_description():
     map_yaml = LaunchConfiguration('map_yaml')
 
     loc_share = get_package_share_directory('go2_localization')
-    default_map_yaml = os.path.join(loc_share, 'config', 'map', 'cafe_world_map.yaml')
     follow_share = get_package_share_directory('go2_path_following')
     plan_share = get_package_share_directory('go2_path_planning')
     bt_plugins_share = get_package_share_directory('go2_bt_plugins')
@@ -185,7 +186,7 @@ def generate_launch_description():
         DeclareLaunchArgument('use_localization', default_value='true'),
         DeclareLaunchArgument('use_following', default_value='true'),
         DeclareLaunchArgument('use_rviz', default_value='true'),
-        DeclareLaunchArgument('map_yaml', default_value=default_map_yaml),
+        DeclareLaunchArgument('map_yaml', default_value=default_map_yaml_path()),
         localization,
         planner,
         following,

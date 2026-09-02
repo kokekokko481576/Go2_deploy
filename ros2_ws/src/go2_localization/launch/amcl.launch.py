@@ -6,14 +6,15 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+from go2_localization import default_map_yaml_path
+
 
 def generate_launch_description():
     pkg_share = get_package_share_directory('go2_localization')
     amcl_config = os.path.join(pkg_share, 'config', 'amcl.yaml')
-    default_map_yaml = os.path.join(pkg_share, 'config', 'map', 'cafe_world_map.yaml')
 
     map_yaml_arg = DeclareLaunchArgument(
-        'map_yaml', default_value=default_map_yaml,
+        'map_yaml', default_value=default_map_yaml_path(),
         description='map_server に渡す地図yamlの絶対パス(既定: cafe_world_map)',
     )
 
