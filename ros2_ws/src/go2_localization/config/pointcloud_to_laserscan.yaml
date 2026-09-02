@@ -45,3 +45,11 @@
       floor_margin: 0.3
       # 参考程度の粗い上限(天井反射等の除外用)
       max_height: 0.3
+
+      # 本体(脚含む)の自己反射除外(2026-09-02追加)。range_min(0.4m)だけでは歩容で脚が
+      # 前に振り出された時に除外しきれず、本体の一部が障害物として地図に焼き付く問題があった。
+      # Nav2 footprint(go2_path_following/go2_path_planningと同じ定義)の値をそのまま流用
+      body_exclude_min_x: -0.38
+      body_exclude_max_x: 0.35
+      body_exclude_min_y: -0.18
+      body_exclude_max_y: 0.18

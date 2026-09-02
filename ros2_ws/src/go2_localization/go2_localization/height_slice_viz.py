@@ -39,10 +39,23 @@ class HeightSliceViz(Node):
         # 参考程度の粗い上限(天井反射等の除外用)。床除去がメインなので緩めでよい
         self.declare_parameter('max_height', 0.3)
 
+        # 本体(脚含む)の自己反射除外用の矩形(target_frame相対、Nav2 footprintと同じ値を既定に
+        # 流用: go2_path_following/go2_path_planningのfootprint「[[0.35,0.18],[0.35,-0.18],
+        # [-0.38,-0.18],[-0.38,0.18]]」)。range_minだけでは歩容で脚が前に振り出された時に
+        # 除外しきれず、本体の一部が障害物として地図に焼き付く(歩き回るほど地図がえぐれる)
+        self.declare_parameter('body_exclude_min_x', -0.38)
+        self.declare_parameter('body_exclude_max_x', 0.35)
+        self.declare_parameter('body_exclude_min_y', -0.18)
+        self.declare_parameter('body_exclude_max_y', 0.18)
+
         self.target_frame = self.get_parameter('target_frame').value
         self.floor_z = self.get_parameter('floor_z').value
         self.floor_margin = self.get_parameter('floor_margin').value
         self.max_height = self.get_parameter('max_height').value
+        self.body_exclude_min_x = self.get_parameter('body_exclude_min_x').value
+        self.body_exclude_max_x = self.get_parameter('body_exclude_max_x').value
+        self.body_exclude_min_y = self.get_parameter('body_exclude_min_y').value
+        self.body_exclude_max_y = self.get_parameter('body_exclude_max_y').value
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -100,7 +113,16 @@ class HeightSliceViz(Node):
 
         is_floor_hit = actual_range >= (floor_range - self.floor_margin)
         is_within_upper_bound = points[:, 2] <= self.max_height
-        return (~is_floor_hit) & is_within_upper_bound
+
+        # 本体(脚含む)の自己反射: 距離に関係なく、base_link相対のx/y矩形内なら除外
+        is_self_body = (
+            (points[:, 0] >= self.body_exclude_min_x)
+            & (points[:, 0] <= self.body_exclude_max_x)
+            & (points[:, 1] >= self.body_exclude_min_y)
+            & (points[:, 1] <= self.body_exclude_max_y)
+        )
+
+        return (~is_floor_hit) & is_within_upper_bound & (~is_self_body)
 
 
 def main(args=None):
