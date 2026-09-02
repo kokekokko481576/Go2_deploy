@@ -1,4 +1,5 @@
 import rclpy
+from builtin_interfaces.msg import Time
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from sensor_msgs.msg import Imu
@@ -36,6 +37,23 @@ def _diag3(v0, v1, v2):
     return cov
 
 
+# 定数のみに依存するので一度だけ計算する(sportmodestateは高頻度配信のため、
+# コールバックのたびにリストを作り直すのを避ける。publish時にシリアライズ
+# されるだけで書き換えられないので使い回して問題ない)
+_ODOM_POSE_COV = _diag6(
+    _POSITION_VARIANCE, _POSITION_VARIANCE, _POSITION_VARIANCE,
+    _YAW_VARIANCE, _YAW_VARIANCE, _YAW_VARIANCE)
+_ODOM_TWIST_COV = _diag6(
+    _VELOCITY_VARIANCE, _VELOCITY_VARIANCE, _VELOCITY_VARIANCE,
+    _VELOCITY_VARIANCE, _VELOCITY_VARIANCE, _VELOCITY_VARIANCE)
+_IMU_ORIENTATION_COV = _diag3(
+    _ORIENTATION_VARIANCE, _ORIENTATION_VARIANCE, _ORIENTATION_VARIANCE)
+_IMU_ANGULAR_VELOCITY_COV = _diag3(
+    _ANGULAR_VELOCITY_VARIANCE, _ANGULAR_VELOCITY_VARIANCE, _ANGULAR_VELOCITY_VARIANCE)
+_IMU_LINEAR_ACCEL_COV = _diag3(
+    _LINEAR_ACCEL_VARIANCE, _LINEAR_ACCEL_VARIANCE, _LINEAR_ACCEL_VARIANCE)
+
+
 class StateToOdomImuNode(Node):
     """実機Go2の`sportmodestate`(unitree_go/msg/SportModeState)を、
     go2_localizationのEKF/床除去チェーンがそのまま食えるnav_msgs/Odometry・
@@ -46,6 +64,9 @@ class StateToOdomImuNode(Node):
     未検証(実機到着後に確認すること):
     - SportModeState.velocityが機体座標系(child_frame_id=base_link相当)であるという前提
     - IMUの実搭載位置とbase_linkのズレ(frame_idはbase_link近似で代用)
+    - msg.stamp(ファームウェア側の実測時刻)がROS2の壁時計(use_sim_time: false)と
+      同じ基準か。ずれている場合、他ノード(height_slice_viz等、ROS受信時刻ベース)との
+      タイムスタンプ不整合でtf2のtransform_tolerance超過が起きる可能性がある
     """
 
     def __init__(self):
@@ -62,7 +83,9 @@ class StateToOdomImuNode(Node):
         )
 
     def _on_state(self, msg: SportModeState):
-        stamp = self.get_clock().now().to_msg()
+        # ノード受信時刻ではなく、ファームウェア側の実測時刻(msg.stamp)を使う。
+        # TimeSpecはbuiltin_interfaces/Timeとフィールド名(sec/nanosec)が一致している
+        stamp = Time(sec=msg.stamp.sec, nanosec=msg.stamp.nanosec)
         qw, qx, qy, qz = msg.imu_state.quaternion
 
         odom = Odometry()
@@ -80,12 +103,8 @@ class StateToOdomImuNode(Node):
         odom.twist.twist.linear.y = float(msg.velocity[1])
         odom.twist.twist.linear.z = float(msg.velocity[2])
         odom.twist.twist.angular.z = float(msg.yaw_speed)
-        odom.pose.covariance = _diag6(
-            _POSITION_VARIANCE, _POSITION_VARIANCE, _POSITION_VARIANCE,
-            _YAW_VARIANCE, _YAW_VARIANCE, _YAW_VARIANCE)
-        odom.twist.covariance = _diag6(
-            _VELOCITY_VARIANCE, _VELOCITY_VARIANCE, _VELOCITY_VARIANCE,
-            _VELOCITY_VARIANCE, _VELOCITY_VARIANCE, _VELOCITY_VARIANCE)
+        odom.pose.covariance = _ODOM_POSE_COV
+        odom.twist.covariance = _ODOM_TWIST_COV
         self._odom_pub.publish(odom)
 
         imu = Imu()
@@ -95,18 +114,15 @@ class StateToOdomImuNode(Node):
         imu.orientation.y = float(qy)
         imu.orientation.z = float(qz)
         imu.orientation.w = float(qw)
-        imu.orientation_covariance = _diag3(
-            _ORIENTATION_VARIANCE, _ORIENTATION_VARIANCE, _ORIENTATION_VARIANCE)
+        imu.orientation_covariance = _IMU_ORIENTATION_COV
         imu.angular_velocity.x = float(msg.imu_state.gyroscope[0])
         imu.angular_velocity.y = float(msg.imu_state.gyroscope[1])
         imu.angular_velocity.z = float(msg.imu_state.gyroscope[2])
-        imu.angular_velocity_covariance = _diag3(
-            _ANGULAR_VELOCITY_VARIANCE, _ANGULAR_VELOCITY_VARIANCE, _ANGULAR_VELOCITY_VARIANCE)
+        imu.angular_velocity_covariance = _IMU_ANGULAR_VELOCITY_COV
         imu.linear_acceleration.x = float(msg.imu_state.accelerometer[0])
         imu.linear_acceleration.y = float(msg.imu_state.accelerometer[1])
         imu.linear_acceleration.z = float(msg.imu_state.accelerometer[2])
-        imu.linear_acceleration_covariance = _diag3(
-            _LINEAR_ACCEL_VARIANCE, _LINEAR_ACCEL_VARIANCE, _LINEAR_ACCEL_VARIANCE)
+        imu.linear_acceleration_covariance = _IMU_LINEAR_ACCEL_COV
         self._imu_pub.publish(imu)
 
 
