@@ -46,6 +46,12 @@ class HeightSliceViz(Node):
         # 【重複注意】同じ矩形がconfig/pointcloud_to_laserscan.yaml(body_exclude_*)・
         # go2_path_following/go2_path_planningのfootprintにも手打ちされている。
         # footprintを更新する時は全部直すこと
+        #
+        # 【既知の制約】距離(range)ではなくbase_link相対のx/y位置だけで判定するため、
+        # この矩形の真下にある本物の低い障害物(敷居・段差等、max_height以下のもの)も
+        # 脚の自己反射と同様に除去されてしまい、SLAM地図上で見えなくなる。正しく区別する
+        # には各脚の実際の関節位置をTFで追って除外範囲にする必要があるが、今回はそこまで
+        # 実装しておらず、静的な矩形での簡易対応にとどめている
         self.declare_parameter('body_exclude_min_x', -0.38)
         self.declare_parameter('body_exclude_max_x', 0.35)
         self.declare_parameter('body_exclude_min_y', -0.18)
