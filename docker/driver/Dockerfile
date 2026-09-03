@@ -23,6 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-rosbag2 \
     ros-humble-rclpy \
     ros-humble-geometry-msgs \
+    ros-humble-nav-msgs \
+    ros-humble-sensor-msgs \
     libyaml-cpp-dev \
     python3-colcon-common-extensions \
     iproute2 \

@@ -67,6 +67,7 @@ sim は既定で **本家(upstream)Nav2 なし**で起動する（自作の自�
 |---|---|
 | `--sim-nav2` | sim を本家 Nav2 付きで起動（#5 の本家スタック比較用。重い） |
 | `--gate1` | GATE1計測モード。本家Nav2に加え sim 側 RViz も止める（最軽量・自作スタックだけで駆動） |
+| `--map` | 地図作成モード。対話を省略し、EKF+床除去+slam_toolboxだけを起動する（実機向けmapping_real.launch.pyのsimリハーサル用、Issue #67） |
 | `--no-build` | `colcon build` を飛ばす（直前のビルドを使う） |
 | `-h`, `--help` | ヘルプ |
 

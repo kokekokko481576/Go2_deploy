@@ -171,8 +171,13 @@ docker compose exec ros2 ros2 run teleop_twist_keyboard teleop_twist_keyboard \
 #### 4-2. 点群を見ながらの検証(顎LiDAR実機のROS2ドライバが動いている場合)
 
 4-1の実測値は「だいたい合っている」レベルなので、可能なら点群を目で見て追い込む。
-**前提**: 顎LiDAR実機のROS2ドライバ(センサのベンダーSDK)が既にPointCloud2を配信できる状態で
-あること。まだ無ければこの4-2は飛ばし、4-1の値をいったんそのまま`robot.xacro`に反映する。
+
+**(2026-09-02追記)**: 当初「顎LiDAR実機のROS2ドライバ(ベンダーSDK)が別途必要」という
+前提で書いていたが、`unitree_ros2/README.md`を確認したところ**`unitree_ros2`自体が
+実機接続時に標準で`/utlidar/cloud`(`PointCloud2`、frame_id: `utlidar_lidar`)を配信する**
+とわかった(READMEの「visualizing robot lidar data」節)。つまり別途ベンダーSDKを
+用意しなくても、DDS接続(上記1〜2)ができた時点でこの4-2はそのまま実行できる見込み。
+念のため当日`ros2 topic echo --no-arr /utlidar/cloud`で実際に配信されているか確認すること。
 
 1. [ ] 平らな床の上でロボットを、平らな壁に正対させて静止させる。ロボットの適当な基準点
        (胴体の前端など)から壁までの距離を正確に測っておく(例: 2.00m)
@@ -181,10 +186,13 @@ docker compose exec ros2 ros2 run teleop_twist_keyboard teleop_twist_keyboard \
        ros2 run tf2_ros static_transform_publisher \
          --x <x> --y <y> --z <z> \
          --roll <roll_rad> --pitch <pitch_rad> --yaw 0 \
-         --frame-id base_link --child-frame-id chin_lidar_frame
+         --frame-id base_link --child-frame-id utlidar_lidar
        ```
        で暫定TFを直接流す(URDFを毎回編集・再ビルドしなくて済む。名前付き引数なら
-       roll/pitch/yawの並び順を間違えにくい)
+       roll/pitch/yawの並び順を間違えにくい)。**child-frame-idは`/utlidar/cloud`の
+       実際のframe_id(`utlidar_lidar`)に合わせること**(以前の版は`chin_lidar_frame`と
+       書いていたが、それだと自動変換(height_slice_viz等)が参照するframe_idと一致せず
+       このTFが使われない)
 3. [ ] `robot_state_publisher`(またはstatic_transform_publisher)+実機LiDARの点群を、
        RViz2でFixed Frameを`base_link`にして表示する
 4. [ ] 確認する2点:
@@ -204,6 +212,21 @@ docker compose exec ros2 ros2 run teleop_twist_keyboard teleop_twist_keyboard \
 - [ ] 測定値・方法をIssue #4にコメントしておく
 
 ---
+
+### 5. クソ雑map作成(実機M1/M2、Issue #10・#13・#67向け、2026-09-02追加)
+
+1〜4(歩行確認・LiDAR搭載位置)が済んだら、そのまま実機地図の作成に進める。
+`state_to_odom_imu_node`(driverコンテナ、`sportmodestate`→Odometry/Imu変換)+
+`go2_localization mapping_real.launch.py`(devコンテナ、EKF+床除去+slam_toolbox)
+一式を用意済み。**実機・実データでは未検証**なので、手順・トピック名の詳細は
+`ros2_ws/src/go2_localization/README.md`の「実機向け(未検証・下ごしらえ)」節を参照。
+
+- [ ] `ros2 topic echo /sportmodestate`が実データで届くことを確認(未確認ならこの節は保留)
+- [ ] `docker/driver`: `ros2 run go2_sport_bridge state_to_odom_imu_node`を起動
+- [ ] `docker`(dev): `ros2 launch go2_localization mapping_real.launch.py`を起動
+- [ ] RViz2(Fixed Frame: map)で地図が広がっていくのを見ながら歩かせる
+- [ ] `ros2 run nav2_map_server map_saver_cli -f <保存先> --ros-args -p save_map_timeout:=5.0`
+      で保存(手順はgo2_localization README参照)
 
 ### 未確認・当日確認が必要な事項
 

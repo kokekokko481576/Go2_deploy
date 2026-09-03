@@ -1,0 +1,166 @@
+import rclpy
+from nav_msgs.msg import Odometry
+from rclpy.node import Node
+from sensor_msgs.msg import Imu
+from unitree_go.msg import SportModeState
+
+# Unitree IMUState.quaternion は [w, x, y, z] 順
+# (external/unitree_ros2/example/src/src/read_low_state.cpp のログ出力順で確認。
+#  gitサブモジュールなので `git submodule update --init` していないと手元には無い)。
+# ROS2 geometry_msgs/Quaternion は (x, y, z, w) 順なので並べ替えが要る。
+
+# 以下は実測していない仮の対角共分散のデフォルト値(REP-103の「未知」を表す-1には
+# しない=EKFに使わせる)。全ゼロのままpublishすると`robot_localization`が「完全に
+# 確信度100%の観測」と解釈し、他の入力より過剰に信用してしまう。ROSパラメータ化して
+# あるので、実機到着後の再チューニングはイメージ再ビルド無しで
+# `--ros-args -p position_variance:=...`のように上書きできる
+_DEFAULT_POSITION_VARIANCE = 0.01   # (m^2)
+_DEFAULT_YAW_VARIANCE = 0.05        # (rad^2)
+_DEFAULT_VELOCITY_VARIANCE = 0.01   # (m/s)^2 または (rad/s)^2
+_DEFAULT_ORIENTATION_VARIANCE = 0.05     # (rad^2)
+_DEFAULT_ANGULAR_VELOCITY_VARIANCE = 0.02   # (rad/s)^2
+_DEFAULT_LINEAR_ACCEL_VARIANCE = 0.1        # (m/s^2)^2
+# SportModeStateにはロール/ピッチ角速度が無く(yaw_speedのみ)、twist.angular.x/yは
+# 常に0.0のまま(未計測)。他の軸と同じ実測相当の分散を入れると「ロール/ピッチ角速度を
+# 自信を持って0と計測した」という誤った情報になるため、大きな分散で「ほぼ信用するな」
+# を明示する(REP-103の-1相当の意図。6x6共分散には-1の特別扱いは無いため大きな値で代用)
+_UNMEASURED_VARIANCE = 1e6
+
+
+def _diag6(vx, vy, vz, vroll, vpitch, vyaw):
+    cov = [0.0] * 36
+    for i, v in enumerate((vx, vy, vz, vroll, vpitch, vyaw)):
+        cov[i * 6 + i] = v
+    return cov
+
+
+def _diag3(v0, v1, v2):
+    cov = [0.0] * 9
+    cov[0] = v0
+    cov[4] = v1
+    cov[8] = v2
+    return cov
+
+
+class StateToOdomImuNode(Node):
+    """実機Go2の`sportmodestate`(unitree_go/msg/SportModeState)を、
+    go2_localizationのEKF/床除去チェーンがそのまま食えるnav_msgs/Odometry・
+    sensor_msgs/Imuへ変換して配信する。sim側で upstream(gazebo_sim) が既に
+    /robot1/odometry/filtered・/robot1/imu_plugin/out を出しているのと同じ役割を、
+    実機では自前で用意する必要があるための橋渡し。
+
+    未検証(実機到着後に確認すること):
+    - SportModeState.velocityが機体座標系(child_frame_id=base_link相当)であるという前提
+    - IMUの実搭載位置とbase_linkのズレ(frame_idはbase_link近似で代用)
+    - header.stampにmsg.stamp(ファームウェア側の実測時刻)ではなくノード受信時刻
+      (self.get_clock().now())を使っている。ファームウェアのクロックがROS2の壁時計
+      (use_sim_time: false)と同じ基準か不明な段階では、対応が取れずtf2の
+      transform_toleranceを全滅させるリスクの方が大きいと判断した(受信時刻ベースの
+      弱点は精度の甘さだけで済む)。実機で両者のクロックが揃っていると確認できたら
+      msg.stampに切り替えるとdt精度が上がる
+    """
+
+    def __init__(self):
+        super().__init__('state_to_odom_imu_node')
+
+        self.declare_parameter('position_variance', _DEFAULT_POSITION_VARIANCE)
+        self.declare_parameter('yaw_variance', _DEFAULT_YAW_VARIANCE)
+        self.declare_parameter('velocity_variance', _DEFAULT_VELOCITY_VARIANCE)
+        self.declare_parameter('orientation_variance', _DEFAULT_ORIENTATION_VARIANCE)
+        self.declare_parameter('angular_velocity_variance', _DEFAULT_ANGULAR_VELOCITY_VARIANCE)
+        self.declare_parameter('linear_accel_variance', _DEFAULT_LINEAR_ACCEL_VARIANCE)
+
+        position_variance = self.get_parameter('position_variance').value
+        yaw_variance = self.get_parameter('yaw_variance').value
+        velocity_variance = self.get_parameter('velocity_variance').value
+        orientation_variance = self.get_parameter('orientation_variance').value
+        angular_velocity_variance = self.get_parameter('angular_velocity_variance').value
+        linear_accel_variance = self.get_parameter('linear_accel_variance').value
+
+        # パラメータ取得はここで一度だけ行い、コールバックのたびに引かない
+        # (sportmodestateは高頻度配信のため。共分散配列も一度だけ組み立てて使い回す)
+        self._odom_pose_cov = _diag6(
+            position_variance, position_variance, position_variance,
+            yaw_variance, yaw_variance, yaw_variance)
+        self._odom_twist_cov = _diag6(
+            velocity_variance, velocity_variance, velocity_variance,
+            _UNMEASURED_VARIANCE, _UNMEASURED_VARIANCE, velocity_variance)
+        self._imu_orientation_cov = _diag3(
+            orientation_variance, orientation_variance, orientation_variance)
+        self._imu_angular_velocity_cov = _diag3(
+            angular_velocity_variance, angular_velocity_variance, angular_velocity_variance)
+        self._imu_linear_accel_cov = _diag3(
+            linear_accel_variance, linear_accel_variance, linear_accel_variance)
+
+        self._odom_pub = self.create_publisher(Odometry, '/go2_state_bridge/odom', 10)
+        self._imu_pub = self.create_publisher(Imu, '/go2_state_bridge/imu', 10)
+        # (2026-09-03) 一度'lf/sportmodestate'(低頻度版)に変更したが撤回した。
+        # 'lf'の実際のレートが未確認(unitree_ros2/READMEに具体的なHz記載が無い)で、
+        # 他社Unitree製品での"lf"系トピックの実例からは~1Hz程度の可能性がある。
+        # config/ekf.yamlはfrequency: 30.0で動く前提のため、入力が1Hzしか来ないと
+        # フィルタが自身の運動モデルだけで空回りし、SLAMのpose priorもスカスカになる
+        # (地図が作れないという致命的な失敗の方が、購読過多による軽いCPU負荷より重い
+        # と判断し、非対称リスクの考え方でフルレート版に戻した)。実機で両方の実測
+        # レートを確認できたら、'lf/sportmodestate'で足りるか判断し直すこと
+        self.create_subscription(SportModeState, 'sportmodestate', self._on_state, 10)
+
+        self.get_logger().info(
+            'state_to_odom_imu ready: sportmodestate -> '
+            '/go2_state_bridge/odom (nav_msgs/Odometry) + '
+            '/go2_state_bridge/imu (sensor_msgs/Imu)'
+        )
+
+    def _on_state(self, msg: SportModeState):
+        stamp = self.get_clock().now().to_msg()
+        qw, qx, qy, qz = msg.imu_state.quaternion
+
+        odom = Odometry()
+        odom.header.stamp = stamp
+        odom.header.frame_id = 'odom'
+        odom.child_frame_id = 'base_link'
+        odom.pose.pose.position.x = float(msg.position[0])
+        odom.pose.pose.position.y = float(msg.position[1])
+        odom.pose.pose.position.z = float(msg.position[2])
+        odom.pose.pose.orientation.x = float(qx)
+        odom.pose.pose.orientation.y = float(qy)
+        odom.pose.pose.orientation.z = float(qz)
+        odom.pose.pose.orientation.w = float(qw)
+        odom.twist.twist.linear.x = float(msg.velocity[0])
+        odom.twist.twist.linear.y = float(msg.velocity[1])
+        odom.twist.twist.linear.z = float(msg.velocity[2])
+        odom.twist.twist.angular.z = float(msg.yaw_speed)
+        odom.pose.covariance = self._odom_pose_cov
+        odom.twist.covariance = self._odom_twist_cov
+        self._odom_pub.publish(odom)
+
+        imu = Imu()
+        imu.header.stamp = stamp
+        imu.header.frame_id = 'base_link'
+        imu.orientation.x = float(qx)
+        imu.orientation.y = float(qy)
+        imu.orientation.z = float(qz)
+        imu.orientation.w = float(qw)
+        imu.orientation_covariance = self._imu_orientation_cov
+        imu.angular_velocity.x = float(msg.imu_state.gyroscope[0])
+        imu.angular_velocity.y = float(msg.imu_state.gyroscope[1])
+        imu.angular_velocity.z = float(msg.imu_state.gyroscope[2])
+        imu.angular_velocity_covariance = self._imu_angular_velocity_cov
+        imu.linear_acceleration.x = float(msg.imu_state.accelerometer[0])
+        imu.linear_acceleration.y = float(msg.imu_state.accelerometer[1])
+        imu.linear_acceleration.z = float(msg.imu_state.accelerometer[2])
+        imu.linear_acceleration_covariance = self._imu_linear_accel_cov
+        self._imu_pub.publish(imu)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = StateToOdomImuNode()
+    try:
+        rclpy.spin(node)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

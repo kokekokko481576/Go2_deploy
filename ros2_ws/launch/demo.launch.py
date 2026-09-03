@@ -24,9 +24,11 @@ data flow(フェーズB配線・全ノード共通。BT導入(#23派生)後):
   use_localization:=true  → 実装済み EKF/AMCL(go2_localization)が供給
   use_localization:=false → 起動しない。自作の推定が /go2_localization/tf を出す前提
 
-引数(既定は全て true):
-  use_localization : 実装済み自己位置推定(go2_localization)を起動するか
-  use_following    : 経路追従(controller_server + lifecycle)を起動するか
+引数:
+  use_localization : 実装済み自己位置推定(go2_localization)を起動するか(既定true)
+  use_following    : 経路追従(controller_server + lifecycle)を起動するか(既定true)
+  map_yaml         : AMCLのmap_serverに渡す地図yamlの絶対パス(既定: cafe_world_map。
+                     use_localization:=falseなら未使用)
 """
 import os
 import shutil
@@ -38,6 +40,8 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+from go2_localization import default_map_yaml_path
 
 _THIS_DIR = os.path.dirname(os.path.realpath(__file__))
 
@@ -53,6 +57,7 @@ def generate_launch_description():
     use_localization = LaunchConfiguration('use_localization')
     use_following = LaunchConfiguration('use_following')
     use_rviz = LaunchConfiguration('use_rviz')
+    map_yaml = LaunchConfiguration('map_yaml')
 
     loc_share = get_package_share_directory('go2_localization')
     follow_share = get_package_share_directory('go2_path_following')
@@ -68,6 +73,7 @@ def generate_launch_description():
     localization = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(loc_share, 'launch', 'localization.launch.py')),
+        launch_arguments={'map_yaml': map_yaml}.items(),
         condition=IfCondition(use_localization),
     )
 
@@ -180,6 +186,7 @@ def generate_launch_description():
         DeclareLaunchArgument('use_localization', default_value='true'),
         DeclareLaunchArgument('use_following', default_value='true'),
         DeclareLaunchArgument('use_rviz', default_value='true'),
+        DeclareLaunchArgument('map_yaml', default_value=default_map_yaml_path()),
         localization,
         planner,
         following,

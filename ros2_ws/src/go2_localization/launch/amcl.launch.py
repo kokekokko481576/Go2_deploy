@@ -2,20 +2,28 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+from go2_localization import default_map_yaml_path
 
 
 def generate_launch_description():
     pkg_share = get_package_share_directory('go2_localization')
     amcl_config = os.path.join(pkg_share, 'config', 'amcl.yaml')
-    map_yaml = os.path.join(pkg_share, 'config', 'map', 'cafe_world_map.yaml')
+
+    map_yaml_arg = DeclareLaunchArgument(
+        'map_yaml', default_value=default_map_yaml_path(),
+        description='map_server に渡す地図yamlの絶対パス(既定: cafe_world_map)',
+    )
 
     map_server_node = Node(
         package='nav2_map_server',
         executable='map_server',
         name='map_server',
         output='screen',
-        parameters=[amcl_config, {'yaml_filename': map_yaml}],
+        parameters=[amcl_config, {'yaml_filename': LaunchConfiguration('map_yaml')}],
         remappings=[
             ('map', '/go2_localization/map'),
         ],
@@ -49,4 +57,4 @@ def generate_launch_description():
         parameters=[amcl_config],
     )
 
-    return LaunchDescription([map_server_node, amcl_node, lifecycle_manager_node])
+    return LaunchDescription([map_yaml_arg, map_server_node, amcl_node, lifecycle_manager_node])
