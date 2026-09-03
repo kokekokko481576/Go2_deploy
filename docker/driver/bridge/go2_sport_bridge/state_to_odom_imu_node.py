@@ -19,6 +19,11 @@ _VELOCITY_VARIANCE = 0.01   # (m/s)^2 または (rad/s)^2
 _ORIENTATION_VARIANCE = 0.05     # (rad^2)
 _ANGULAR_VELOCITY_VARIANCE = 0.02   # (rad/s)^2
 _LINEAR_ACCEL_VARIANCE = 0.1        # (m/s^2)^2
+# SportModeStateにはロール/ピッチ角速度が無く(yaw_speedのみ)、twist.angular.x/yは
+# 常に0.0のまま(未計測)。他の軸と同じ実測相当の分散を入れると「ロール/ピッチ角速度を
+# 自信を持って0と計測した」という誤った情報になるため、大きな分散で「ほぼ信用するな」
+# を明示する(REP-103の-1相当の意図。6x6共分散には-1の特別扱いは無いため大きな値で代用)
+_UNMEASURED_VARIANCE = 1e6
 
 
 def _diag6(vx, vy, vz, vroll, vpitch, vyaw):
@@ -44,7 +49,7 @@ _ODOM_POSE_COV = _diag6(
     _YAW_VARIANCE, _YAW_VARIANCE, _YAW_VARIANCE)
 _ODOM_TWIST_COV = _diag6(
     _VELOCITY_VARIANCE, _VELOCITY_VARIANCE, _VELOCITY_VARIANCE,
-    _VELOCITY_VARIANCE, _VELOCITY_VARIANCE, _VELOCITY_VARIANCE)
+    _UNMEASURED_VARIANCE, _UNMEASURED_VARIANCE, _VELOCITY_VARIANCE)
 _IMU_ORIENTATION_COV = _diag3(
     _ORIENTATION_VARIANCE, _ORIENTATION_VARIANCE, _ORIENTATION_VARIANCE)
 _IMU_ANGULAR_VELOCITY_COV = _diag3(
@@ -76,12 +81,18 @@ class StateToOdomImuNode(Node):
 
         self._odom_pub = self.create_publisher(Odometry, '/go2_state_bridge/odom', 10)
         self._imu_pub = self.create_publisher(Imu, '/go2_state_bridge/imu', 10)
-        # 'lf'(low frequency)版を購読する。EKF/マッピング用途には高頻度版
-        # 'sportmodestate'は過剰(unitree_ros2/README.md「lf/sportmodestate」参照)
-        self.create_subscription(SportModeState, 'lf/sportmodestate', self._on_state, 10)
+        # (2026-09-03) 一度'lf/sportmodestate'(低頻度版)に変更したが撤回した。
+        # 'lf'の実際のレートが未確認(unitree_ros2/READMEに具体的なHz記載が無い)で、
+        # 他社Unitree製品での"lf"系トピックの実例からは~1Hz程度の可能性がある。
+        # config/ekf.yamlはfrequency: 30.0で動く前提のため、入力が1Hzしか来ないと
+        # フィルタが自身の運動モデルだけで空回りし、SLAMのpose priorもスカスカになる
+        # (地図が作れないという致命的な失敗の方が、購読過多による軽いCPU負荷より重い
+        # と判断し、非対称リスクの考え方でフルレート版に戻した)。実機で両方の実測
+        # レートを確認できたら、'lf/sportmodestate'で足りるか判断し直すこと
+        self.create_subscription(SportModeState, 'sportmodestate', self._on_state, 10)
 
         self.get_logger().info(
-            'state_to_odom_imu ready: lf/sportmodestate -> '
+            'state_to_odom_imu ready: sportmodestate -> '
             '/go2_state_bridge/odom (nav_msgs/Odometry) + '
             '/go2_state_bridge/imu (sensor_msgs/Imu)'
         )
