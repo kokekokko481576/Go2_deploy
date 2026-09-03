@@ -9,16 +9,17 @@ from unitree_go.msg import SportModeState
 #  gitサブモジュールなので `git submodule update --init` していないと手元には無い)。
 # ROS2 geometry_msgs/Quaternion は (x, y, z, w) 順なので並べ替えが要る。
 
-# 以下は実測していない仮の対角共分散(REP-103の「未知」を表す-1にはしない=EKFに
-# 使わせる)。全ゼロのままpublishすると`robot_localization`が「完全に確信度100%の
-# 観測」と解釈し、他の入力より過剰に信用してしまう。実機到着後、実際のばらつきを
-# 見て調整すること
-_POSITION_VARIANCE = 0.01   # (m^2)
-_YAW_VARIANCE = 0.05        # (rad^2)
-_VELOCITY_VARIANCE = 0.01   # (m/s)^2 または (rad/s)^2
-_ORIENTATION_VARIANCE = 0.05     # (rad^2)
-_ANGULAR_VELOCITY_VARIANCE = 0.02   # (rad/s)^2
-_LINEAR_ACCEL_VARIANCE = 0.1        # (m/s^2)^2
+# 以下は実測していない仮の対角共分散のデフォルト値(REP-103の「未知」を表す-1には
+# しない=EKFに使わせる)。全ゼロのままpublishすると`robot_localization`が「完全に
+# 確信度100%の観測」と解釈し、他の入力より過剰に信用してしまう。ROSパラメータ化して
+# あるので、実機到着後の再チューニングはイメージ再ビルド無しで
+# `--ros-args -p position_variance:=...`のように上書きできる
+_DEFAULT_POSITION_VARIANCE = 0.01   # (m^2)
+_DEFAULT_YAW_VARIANCE = 0.05        # (rad^2)
+_DEFAULT_VELOCITY_VARIANCE = 0.01   # (m/s)^2 または (rad/s)^2
+_DEFAULT_ORIENTATION_VARIANCE = 0.05     # (rad^2)
+_DEFAULT_ANGULAR_VELOCITY_VARIANCE = 0.02   # (rad/s)^2
+_DEFAULT_LINEAR_ACCEL_VARIANCE = 0.1        # (m/s^2)^2
 # SportModeStateにはロール/ピッチ角速度が無く(yaw_speedのみ)、twist.angular.x/yは
 # 常に0.0のまま(未計測)。他の軸と同じ実測相当の分散を入れると「ロール/ピッチ角速度を
 # 自信を持って0と計測した」という誤った情報になるため、大きな分散で「ほぼ信用するな」
@@ -41,23 +42,6 @@ def _diag3(v0, v1, v2):
     return cov
 
 
-# 定数のみに依存するので一度だけ計算する(sportmodestateは高頻度配信のため、
-# コールバックのたびにリストを作り直すのを避ける。publish時にシリアライズ
-# されるだけで書き換えられないので使い回して問題ない)
-_ODOM_POSE_COV = _diag6(
-    _POSITION_VARIANCE, _POSITION_VARIANCE, _POSITION_VARIANCE,
-    _YAW_VARIANCE, _YAW_VARIANCE, _YAW_VARIANCE)
-_ODOM_TWIST_COV = _diag6(
-    _VELOCITY_VARIANCE, _VELOCITY_VARIANCE, _VELOCITY_VARIANCE,
-    _UNMEASURED_VARIANCE, _UNMEASURED_VARIANCE, _VELOCITY_VARIANCE)
-_IMU_ORIENTATION_COV = _diag3(
-    _ORIENTATION_VARIANCE, _ORIENTATION_VARIANCE, _ORIENTATION_VARIANCE)
-_IMU_ANGULAR_VELOCITY_COV = _diag3(
-    _ANGULAR_VELOCITY_VARIANCE, _ANGULAR_VELOCITY_VARIANCE, _ANGULAR_VELOCITY_VARIANCE)
-_IMU_LINEAR_ACCEL_COV = _diag3(
-    _LINEAR_ACCEL_VARIANCE, _LINEAR_ACCEL_VARIANCE, _LINEAR_ACCEL_VARIANCE)
-
-
 class StateToOdomImuNode(Node):
     """実機Go2の`sportmodestate`(unitree_go/msg/SportModeState)を、
     go2_localizationのEKF/床除去チェーンがそのまま食えるnav_msgs/Odometry・
@@ -78,6 +62,35 @@ class StateToOdomImuNode(Node):
 
     def __init__(self):
         super().__init__('state_to_odom_imu_node')
+
+        self.declare_parameter('position_variance', _DEFAULT_POSITION_VARIANCE)
+        self.declare_parameter('yaw_variance', _DEFAULT_YAW_VARIANCE)
+        self.declare_parameter('velocity_variance', _DEFAULT_VELOCITY_VARIANCE)
+        self.declare_parameter('orientation_variance', _DEFAULT_ORIENTATION_VARIANCE)
+        self.declare_parameter('angular_velocity_variance', _DEFAULT_ANGULAR_VELOCITY_VARIANCE)
+        self.declare_parameter('linear_accel_variance', _DEFAULT_LINEAR_ACCEL_VARIANCE)
+
+        position_variance = self.get_parameter('position_variance').value
+        yaw_variance = self.get_parameter('yaw_variance').value
+        velocity_variance = self.get_parameter('velocity_variance').value
+        orientation_variance = self.get_parameter('orientation_variance').value
+        angular_velocity_variance = self.get_parameter('angular_velocity_variance').value
+        linear_accel_variance = self.get_parameter('linear_accel_variance').value
+
+        # パラメータ取得はここで一度だけ行い、コールバックのたびに引かない
+        # (sportmodestateは高頻度配信のため。共分散配列も一度だけ組み立てて使い回す)
+        self._odom_pose_cov = _diag6(
+            position_variance, position_variance, position_variance,
+            yaw_variance, yaw_variance, yaw_variance)
+        self._odom_twist_cov = _diag6(
+            velocity_variance, velocity_variance, velocity_variance,
+            _UNMEASURED_VARIANCE, _UNMEASURED_VARIANCE, velocity_variance)
+        self._imu_orientation_cov = _diag3(
+            orientation_variance, orientation_variance, orientation_variance)
+        self._imu_angular_velocity_cov = _diag3(
+            angular_velocity_variance, angular_velocity_variance, angular_velocity_variance)
+        self._imu_linear_accel_cov = _diag3(
+            linear_accel_variance, linear_accel_variance, linear_accel_variance)
 
         self._odom_pub = self.create_publisher(Odometry, '/go2_state_bridge/odom', 10)
         self._imu_pub = self.create_publisher(Imu, '/go2_state_bridge/imu', 10)
@@ -116,8 +129,8 @@ class StateToOdomImuNode(Node):
         odom.twist.twist.linear.y = float(msg.velocity[1])
         odom.twist.twist.linear.z = float(msg.velocity[2])
         odom.twist.twist.angular.z = float(msg.yaw_speed)
-        odom.pose.covariance = _ODOM_POSE_COV
-        odom.twist.covariance = _ODOM_TWIST_COV
+        odom.pose.covariance = self._odom_pose_cov
+        odom.twist.covariance = self._odom_twist_cov
         self._odom_pub.publish(odom)
 
         imu = Imu()
@@ -127,15 +140,15 @@ class StateToOdomImuNode(Node):
         imu.orientation.y = float(qy)
         imu.orientation.z = float(qz)
         imu.orientation.w = float(qw)
-        imu.orientation_covariance = _IMU_ORIENTATION_COV
+        imu.orientation_covariance = self._imu_orientation_cov
         imu.angular_velocity.x = float(msg.imu_state.gyroscope[0])
         imu.angular_velocity.y = float(msg.imu_state.gyroscope[1])
         imu.angular_velocity.z = float(msg.imu_state.gyroscope[2])
-        imu.angular_velocity_covariance = _IMU_ANGULAR_VELOCITY_COV
+        imu.angular_velocity_covariance = self._imu_angular_velocity_cov
         imu.linear_acceleration.x = float(msg.imu_state.accelerometer[0])
         imu.linear_acceleration.y = float(msg.imu_state.accelerometer[1])
         imu.linear_acceleration.z = float(msg.imu_state.accelerometer[2])
-        imu.linear_acceleration_covariance = _IMU_LINEAR_ACCEL_COV
+        imu.linear_acceleration_covariance = self._imu_linear_accel_cov
         self._imu_pub.publish(imu)
 
 
