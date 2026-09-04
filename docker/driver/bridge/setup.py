@@ -10,6 +10,9 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        # 実機操作の補助スクリプト。`ros2 run go2_sport_bridge estop.sh` で呼べるよう
+        # lib/<パッケージ名> に置く(ros2 run が実行ファイルを探す場所)。
+        ('lib/' + package_name, ['scripts/estop.sh', 'scripts/jog.sh']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
