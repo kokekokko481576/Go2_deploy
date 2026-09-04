@@ -97,6 +97,10 @@ GO2_NIC=enp2s0 docker compose up -d
 
 ### 3. 起立 → cmd_velブリッジ起動 → テレオペ
 
+**先に「起立させただけでは歩かない」ことを頭に入れておく。** 機体が「通常モード」でないと
+Move命令を受け付けても歩かない。DDS上は指令が正常に流れて見えるため、これを知らないと
+原因の切り分けで時間を溶かす(2026-09-02 実測)。
+
 ```bash
 # driverコンテナ: 起立
 docker compose exec driver ros2 run unitree_ros2_example go2_sport_client 4   # StandUp
@@ -104,23 +108,52 @@ docker compose exec driver ros2 run unitree_ros2_example go2_sport_client 4   # 
 # driverコンテナ: cmd_vel→Moveブリッジ
 docker compose exec driver ros2 run go2_sport_bridge cmd_vel_to_sport_node
 
+# driverコンテナ: **非常停止用**。別ターミナルで打てる状態にしてから先に進む
+docker compose exec driver ros2 run go2_sport_bridge estop.sh
+```
+
+まず**テレオペではなく`jog.sh`で1軸ずつ**確認する。テレオペはキー1つで複数軸が同時に動き、
+符号が逆だったときに何が起きたのか分からなくなる。
+
+```bash
+# driverコンテナ: 1軸ずつ(前進 / 左 / 左旋回)。正の向きは REP-103
+docker compose exec driver ros2 run go2_sport_bridge jog.sh vx 0.20 1.0
+docker compose exec driver ros2 run go2_sport_bridge jog.sh wz 0.30 1.0
+```
+
+- [ ] `jog.sh vx 0.20 1.0` で前進する(**0.15m/s未満では進まない**。下記「安全上の注意」参照)
+- [ ] `jog.sh wz 0.30 1.0` で左(反時計回り)に旋回する
+- [ ] 指令を止めてからウォッチドッグが作動し、Go2が停止することを確認
+- [ ] `estop.sh` で確実に停止することを確認
+
+1軸ずつの符号・速さが正しいことを確認してから、テレオペに進む。
+
+```bash
 # devコンテナ: 安全フィルタ
-docker compose exec ros2 ros2 run cmd_vel_safety cmd_vel_safety_node
+docker compose exec ros2 ros2 run cmd_vel_safety cmd_vel_safety_node \
+  --ros-args -p max_linear_x:=0.22 -p max_linear_y:=0.18 -p max_angular_z:=0.45
 
 # devコンテナ: テレオペ(別ターミナル)
 docker compose exec ros2 ros2 run teleop_twist_keyboard teleop_twist_keyboard \
   --ros-args -r cmd_vel:=cmd_vel_raw
 ```
 
-- [ ] キー入力でGo2が実際に前進・旋回することを確認(まずは低速キーから)
+- [ ] キー入力でGo2が実際に前進・旋回することを確認
 - [ ] テレオペを止めてから0.5秒程度でGo2が停止する(ウォッチドッグ)ことを確認
 
 ### 安全上の注意
 
 - 周囲に十分なスペースを確保し、転倒・衝突しても問題ない環境で行う
+- **`estop.sh`を別ターミナルで打てる状態にしてから走らせる**。ブリッジを`Ctrl-C`で
+  落とすだけでは止まらない場合がある(機体が最後の指令のまま歩き続ける恐れがある)
 - 無線非常停止(ハードウェア)は`cmd_vel_safety`のスコープ外。緊急時は実機の物理停止手段
-  (電源ボタン等)を使う準備をしておく
-- 初回は低速(`cmd_vel_safety`の既定上限: `max_linear_x=1.0`, `max_angular_z=1.0`)から確認する
+  (リモコン・電源ボタン等)を使う準備をしておく。**リモコンが最後の砦**なので、
+  リモコンの操作権をAPIに渡す設定(`UseRemoteCommandFromApi`)では走らせないこと
+- **`cmd_vel_safety`の既定上限(`max_linear_x=1.0`, `max_angular_z=1.0`)は実機には高すぎる。**
+  実機で詰めた実績値は `max_linear_x=0.22` / `max_linear_y=0.18` / `max_angular_z=0.45`
+  (2026-09-02)。上のコマンド例のように明示的に下げてから使う
+- **ただし0.15m/s程度を下回る上限にしてはいけない。** Go2の歩容はそこが下限で、それ未満は
+  胴体が揺れるだけで前に進まない。「まず低速から」と0.1m/s以下で試すと「動かない」と誤認する
 
 ### 4. 顎3D LiDARの搭載位置キャリブレーション(Issue #4・C3)
 
