@@ -278,25 +278,84 @@ docker compose exec ros2 ros2 run teleop_twist_keyboard teleop_twist_keyboard \
 
 ### 5. クソ雑map作成(実機M1/M2、Issue #10・#13・#67向け、2026-09-02追加)
 
-1〜4(歩行確認・LiDAR搭載位置)が済んだら、そのまま実機地図の作成に進める。
-`state_to_odom_imu_node`(driverコンテナ、`sportmodestate`→Odometry/Imu変換)+
-`go2_localization mapping_real.launch.py`(devコンテナ、EKF+床除去+slam_toolbox)
-一式を用意済み。**実機・実データでは未検証**なので、手順・トピック名の詳細は
-`ros2_ws/src/go2_localization/README.md`の「実機向け(未検証・下ごしらえ)」節を参照。
+**2026-09-04、実機で slam_toolbox が地図を出すところまで確認した。**
+静止スキャン1枚から 3.35 x 19.35m の地図が立ち、TF `map -> base_link` も解決する。
+歩かせながらの地図成長・保存はまだ実施していない。
 
-- [ ] `ros2 topic echo /sportmodestate`が実データで届くことを確認(未確認ならこの節は保留)
-- [ ] `docker/driver`: `ros2 run go2_sport_bridge state_to_odom_imu_node`を起動
-- [ ] `docker`(dev): `ros2 launch go2_localization mapping_real.launch.py`を起動
+起動は `./docker/driver/real_up.sh` にまとめてある(順序・上書き・自己検定込み)。
+`--motion` を付けない限り機体が動く経路は起動しない。
+
+```bash
+./docker/driver/real_up.sh            # 観測系のみ(機体は動かない)
+./docker/driver/real_up.sh --motion   # 走行系も(cmd_vel_safety + cmd_velブリッジ)
+./docker/driver/real_up.sh status     # 何が動いているか
+./docker/driver/real_up.sh down       # 全部止める
+```
+
+- [x] `ros2 topic echo /sportmodestate`が実データで届くことを確認(2026-09-04)
+- [x] `state_to_odom_imu_node`が実データでOdometry/Imuを出すことを確認(295Hz、2026-09-04)
+- [x] slam_toolboxが`/go2_localization/map`を配信することを確認(2026-09-04)
 - [ ] RViz2(Fixed Frame: map)で地図が広がっていくのを見ながら歩かせる
-- [ ] `ros2 run nav2_map_server map_saver_cli -f <保存先> --ros-args -p save_map_timeout:=5.0`
-      で保存(手順はgo2_localization README参照)
+- [ ] `ros2 run nav2_map_server map_saver_cli -f <保存先> --ros-args -p save_map_timeout:=5.0
+      -r map:=/go2_localization/map` で保存
+
+#### 実機でしか出なかった問題2つ(どちらも黙って壊れる)
+
+**1. 機体の時計が開発PCより1109.7秒(約18.5分)遅れている。**
+`/utlidar/cloud`のstampは機体時計、`state_to_odom_imu_node`のOdometry/Imuは
+開発PCの時計(そのdocstringに書かれている設計判断どおり)。混ざると
+slam_toolboxがスキャン時刻でodom->base_linkを引けず**全スキャンを捨てる**:
+
+```
+Message Filter dropping message: frame 'base_link' at time 1788498317.243
+for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+```
+
+機体の22/tcpは閉じておりログインできないので時刻同期はできない。
+`go2_sport_bridge utlidar_cloud_restamp_node`で受信時に打ち直して中継する。
+オフセットは40秒間で安定していたが、機体時計が跳ねても壊れないよう
+「オフセットを引く」のではなく`now()`で打ち直している。
+
+**2. `mapping_real.launch.py`のままでは床を障害物として地図に焼く。**
+`height_slice_viz`の`cloud_in`が`/utlidar/cloud`に直結されているが、
+床除去の理論距離計算がLiDAR搭載位置TFに依存しており、そのTFは
+`static_tf_real.launch.py`のsim仮値(`pitch=0.35rad`)のままだったため。
+
+実機には**`/utlidar/cloud_base`(ファームウェアが`base_link`座標系で配信、
+frame_id: `base_link`)**があり、これを使えば**未実測の搭載位置TFを迂回できる**。
+あわせて床の高さも実測すると`base_link`相対で**z≈-0.35**(設定値は
+cafe_world由来の-0.27)だった。両方直した効果:
+
+| | 修正前 | 修正後 |
+|---|---|---|
+| 有効ビーム | 241本 中央値0.60m | 107本 中央値1.82m |
+| 1m未満の点 | 81.3%(=床) | **0%** |
+
+`real_up.sh`はslam_toolboxを上げる前にこの比率を測り、30%を超えたら
+**slam_toolboxを起動せずに中断する**(地図に焼き付いてから気づくのを防ぐため)。
+
+**この2つの上書きは`go2_localization`側(担当が別)なので、起動時オプションで
+渡しているだけでファイルには入れていない。** 恒久対応は要相談:
+`height_slice_viz_real.launch.py`に入力トピックと`floor_z`のlaunch引数を足すのが素直。
+
+#### その他、この節で判明したこと
+
+- `/utlidar/cloud`: `sensor_msgs/PointCloud2`、frame_id `utlidar_lidar`、
+  15.4Hz、1スキャン4142点。README記載どおりだった
+- `/utlidar/cloud_base`: 同型で frame_id `base_link`、1スキャン1300〜1450点
+- `/utlidar/cloud_deskewed`: frame_id が `odom`。EKFの`odom`と名前が衝突するので注意
+- `/go2_localization/chin_lidar_scan`のQoSは**BEST_EFFORT**。既定QoS(RELIABLE)で
+  購読すると`incompatible QoS`で1通も受け取れない
+- slam_toolboxの`minimum laser range setting (0.0 m) exceeds the capabilities of
+  the used Lidar (0.4 m)`は`range_min: 0.4`(脚のノイズ除去、Issue #26)由来で想定どおり
 
 ### 未確認・当日確認が必要な事項
 
 - [x] Go2実機のIPアドレス → `192.168.123.161`(2026-09-04確認)
 - [x] ホストのファイアウォールがマルチキャストDDS探索をブロックしないか
       → `GO2_NIC=enp2s0` で実機トピックが見えたためブロックされていない(2026-09-04確認)
-- [ ] Sport Mode APIの利用に純正アプリ側での事前操作(モード切替等)が必要かどうか
-      (unitree_ros2公式READMEには特記無いが、実機依存の可能性があるため当日要確認)
+- [x] Sport Mode APIの利用に純正アプリ側での事前操作が必要かどうか
+      → **必要**。Unitree Goアプリで運動モードを「通常」にしないと、Moveは受理されるのに
+      脚が出ない(2026-09-02実測)。APIからは切り替えられない
 - [x] 顎LiDAR実機のROS2ドライバ(ベンダーSDK)が既に用意されているか
       → 不要。`/utlidar/cloud` がDDS接続だけで配信されていることを確認(2026-09-04)
