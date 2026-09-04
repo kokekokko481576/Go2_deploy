@@ -1,0 +1,9 @@
+# driverイメージのビルドコンテキストはリポジトリルート(docker/driver/compose.yaml の
+# `context: ../..`)。driverが使わない巨大なディレクトリを送らないようにする。
+# 現状ルートをcontextにするのはdriverだけ(dev=docker/、sim=docker/sim/)。
+.git
+chapter1
+external/go2_ros2_sim_py
+ros2_ws/build
+ros2_ws/install
+ros2_ws/log
