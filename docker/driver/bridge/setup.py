@@ -28,6 +28,7 @@ setup(
         'console_scripts': [
             'cmd_vel_to_sport_node = go2_sport_bridge.cmd_vel_to_sport_node:main',
             'state_to_odom_imu_node = go2_sport_bridge.state_to_odom_imu_node:main',
+            'utlidar_cloud_restamp_node = go2_sport_bridge.utlidar_cloud_restamp_node:main',
         ],
     },
 )
