@@ -50,6 +50,18 @@ CycloneDDSがそのNICで起動できない**点を踏まえて手順を組む�
 
 ## 接続当日の手順
 
+### 実測結果(2026-09-04、初接続)
+
+**DDS疎通までは通った。歩行(下記3)はまだ未実施。**
+
+- ホストNIC: `enp2s0`、`192.168.123.51/24`(公式READMEの`.99`でなくても通る)
+- Go2実機: `192.168.123.161`。`ping` 0% loss / 0.27ms
+- driverコンテナから実機トピック **121本** を確認
+  (`/sportmodestate` `/lowstate` `/utlidar/cloud` `/api/sport/request` `/wirelesscontroller` 他)
+- 実データも届いている: バッテリ soc 66% / `power_v` 30.11V、`body_height` 0.321(起立中)
+- `go2_sport_bridge` の `cmd_vel_to_sport_node` は起動成功
+  (20Hz、watchdog 0.5s、上限 vx=0.3 vy=0.2 wz=0.5)。cmd_vel未受信時のウォッチドッグ作動も確認
+
 ### 0. 事前確認
 
 - [ ] Go2本体の電源・起立可能な状態(地面に安全に置ける場所)を確保
@@ -94,6 +106,24 @@ GO2_NIC=enp2s0 docker compose up -d
 - [ ] driverコンテナ内で `ros2 topic list` に実機由来のトピック
       (`/sportmodestate`, `/lowstate` 等、unitree_ros2 README参照)が出ることを確認
 - [ ] `ros2 doctor`: エラー無し
+
+**`GO2_NIC` を渡し忘れると既定の `lo` で起動し、実機は一切見えない**(2026-09-04に踏んだ)。
+`lo` のときは `setup_dds.sh` がユニキャスト探索(`AllowMulticast=false` + `Peer 127.0.0.1`)に
+切り替わるため、実機のマルチキャストSPDPが届かない。`docker inspect go2-driver` の
+`GO2_NIC` を見れば起動時の値が分かる。
+
+**さらに紛らわしいのが `ros2 topic list` で、これは ros2 daemon のキャッシュを返す。**
+`GO2_NIC=lo` で実機が見えていない状態でも、以前の探索結果を引きずって
+実機トピック121本を表示した。**疎通確認は必ず `--no-daemon` を付けて行うこと**
+(`lo` のままなら `/parameter_events` と `/rosout` の2本しか出ない)。
+`ros2 topic hz` は `--no-daemon` を受け付けないので、確認は `topic list` / `topic echo` で行う。
+
+```bash
+docker exec go2-driver bash -c 'source /setup_dds.sh; ros2 topic list --no-daemon'
+```
+
+NICを直すときは `docker compose down` してから `up -d` する
+(`--force-recreate` では古いコンテナが残ることがある)。
 
 ### 3. 起立 → cmd_velブリッジ起動 → テレオペ
 
@@ -263,10 +293,10 @@ docker compose exec ros2 ros2 run teleop_twist_keyboard teleop_twist_keyboard \
 
 ### 未確認・当日確認が必要な事項
 
-- [ ] Go2実機のIPアドレス(固定/DHCPか、具体的な値)
-- [ ] ホストのファイアウォール(ufw等)がマルチキャストDDS探索をブロックしないか
-      (この検証環境ではsudo権限が無く`ufw status`を確認できなかった。当日要確認)
+- [x] Go2実機のIPアドレス → `192.168.123.161`(2026-09-04確認)
+- [x] ホストのファイアウォールがマルチキャストDDS探索をブロックしないか
+      → `GO2_NIC=enp2s0` で実機トピックが見えたためブロックされていない(2026-09-04確認)
 - [ ] Sport Mode APIの利用に純正アプリ側での事前操作(モード切替等)が必要かどうか
       (unitree_ros2公式READMEには特記無いが、実機依存の可能性があるため当日要確認)
-- [ ] 顎LiDAR実機のROS2ドライバ(ベンダーSDK)が既に用意されているか
-      (4-2の点群検証に必要。無ければ4-1の実測のみで進める)
+- [x] 顎LiDAR実機のROS2ドライバ(ベンダーSDK)が既に用意されているか
+      → 不要。`/utlidar/cloud` がDDS接続だけで配信されていることを確認(2026-09-04)
