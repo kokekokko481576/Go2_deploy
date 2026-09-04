@@ -12,6 +12,9 @@
 - `go2_sport_bridge`(自作): `cmd_vel`(経路追従の安全フィルタ出力)を工場出荷状態の歩容
   (Sport Mode API)のMove命令に変換して配信。Isaac Lab学習を使わず、devコンテナのテレオペ/Nav2の
   `cmd_vel`だけで実機を歩かせたい場合の橋渡し(下記「cmd_vel→工場出荷歩容ブリッジ」参照)
+- `d1_sdk`(Unitree提供サンプル): 背面D1-Tアームの疎通用(Issue #63)。Go2のSport Mode APIとは
+  別系統で`unitree_sdk2`のDDSチャネル層を直接使うため、ROS2ノードではなく`run.sh`経由の
+  ビルド済みバイナリとして持つ(下記「D1-Tアーム」参照)
 
 ## cmd_vel→工場出荷歩容ブリッジ(`go2_sport_bridge`)
 
@@ -132,6 +135,37 @@ GO2_NIC=enp3s0 docker compose up -d
 
 - 実機Go2との有線LAN接続でのDDS通信(`GO2_NIC`に実NIC名を指定しての検証)
 - `unitree_ros2_example` の各サンプル(sport_client等)を実機相手に実行しての動作確認
+
+## D1-Tアーム(`d1_sdk`)
+
+背面アームD1-Tの疎通確認用サンプル一式。使い方・注意点は
+[`d1_sdk/README.md`](d1_sdk/README.md) を参照。
+
+```bash
+docker compose exec driver /root/d1_sdk/run.sh              # 実行ファイル一覧
+docker compose exec driver /root/d1_sdk/run.sh arm_zero_control
+```
+
+**バイナリを直接叩かず、必ず `run.sh` を通すこと。** `unitree_sdk2` が
+`/usr/local/lib` に置くCycloneDDSはROS2 Humbleのものと**ABIが違い**、
+ROS2側が先に解決されると `free(): invalid pointer` で落ちる。
+`run.sh` が `LD_LIBRARY_PATH` を先頭に付けてこれを回避する。
+同じ理由で **Dockerfileでは `ldconfig` を実行していない**
+(実行するとROS2のノード側が `/usr/local/lib` のCycloneDDSを掴んで落ちる)。
+
+動作確認(2026-09-04、開発PC: Ubuntu22.04、**アーム実機なし**):
+
+- イメージビルド成功。6実行ファイル(`arm_zero_control`/`get_arm_joint_angle`/
+  `joint_angle_control`/`joint_enable_control`/`multiple_joint_angle_control`/
+  `restore_initial_pose`)が `/root/d1_sdk/build` に生成されることを確認
+- `ldd` で `libddsc.so.0`/`libddscxx.so.0` が `/usr/local/lib` 側に解決されること、
+  かつ `ldconfig -p` にそれらが**載っていない**ことを確認(ROS2側への影響なし)
+- ROS2環境をsourceした同一シェルでD1サンプルを実行しても
+  `free(): invalid pointer` が出ず正常終了すること、および同じコンテナで
+  `go2_sport_bridge` が正常に起動することを確認
+
+未実施(アーム実機が必要なため): コマンドが実際にアームに届くか、feedbackを受信できるか、
+低頻度コマンドでの信頼性(Issue #63の完了条件)。
 
 ## `go2_sport_bridge` 動作確認結果(2026-08-03、開発PC: Ubuntu22.04、ループバック)
 
