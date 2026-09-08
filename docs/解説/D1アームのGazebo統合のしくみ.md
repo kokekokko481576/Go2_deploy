@@ -144,20 +144,36 @@ docker exec go2-sim bash -c "source /opt/ros/jazzy/setup.bash && \
   意味はない
 - **関節の回転軸は実機未照合**。ベンダーURDFをそのまま使っており、他ラボの報告
   (Caltech AMBER Lab)では同系統URDFで2軸が実機と食い違っていたとされる
-- **PID/ゲイン未調整で、関節が重力に負けて可動域の端まで振れることがある**:
-  §6の動作確認で`d1_joint2`に`0.3`を指令したところ、実際には重力に引かれて
-  可動域上限の`1.57`(rad)まで振れて張り付く挙動が確認された。`ros2_control`の
-  `<ros2_control>`ブロックにはゲイン(`p`/`i`/`d`)を明示していない
-  (脚側も同様に未指定で、既存の歩行制御が動いているのは歩容ノードが継続的に
-  指令を送り続けているため)。**Issue #66でjoint-space 2軸デモを作る前に、
-  D1アーム用のゲイン(またはPID)を調整する必要がある**
+- **(2026-09-08解決)重力を無効化して回避**: 当初`ros2_control`にゲイン(p/i/d)を
+  明示しておらず、`d1_joint2`に`0.3`を指令すると重力で可動域上限`1.57`まで振れて
+  張り付く挙動が出ていた。`gz_ros2_control`の`position_proportional_gain`
+  (position指令→effort変換に使う、ロボット全体で共通の1値)を100→5000まで試したが
+  改善せず、原因未特定のまま(脚の歩行にも影響する共通パラメータで検証コストが高い
+  ため深追いを保留)。代わりにD1アームのリンクだけ重力を無効化(`<gravity>false</gravity>`、
+  `imu_link`と同じ手法)する方針にし、解決を確認済み。アームのI/Oは指令角度のみで
+  動力学に依存した挙動は不要なため実害はないと判断。**本格的な動力学が必要になったら
+  この重力無効化を見直すこと**
 - **脚用`joint_group_controller`とアーム用`d1_arm_controller`は別系統**。歩行ロジックを
   壊さないための意図的な分離であり、今後もこの2つを混ぜないこと
+- **(2026-09-08解決)中立姿勢でのfootprintはみ出しを修正済み**: 全関節0の中立姿勢で、
+  グリッパー先端(`d1_link_l`/`d1_link_r`)が`base_link`原点からx=0.294〜0.361まで
+  到達することが判明(STLメッシュの実寸法+各関節原点の積み上げで算出)。従来の
+  footprint上限`x_max=0.35`を約1.1cmはみ出していたため、`x_max=0.37`に更新
+  (`go2_path_following`/`go2_path_planning`のfootprint、`go2_localization`の
+  `body_exclude_max_x`・`height_slice_viz.py`のデフォルト値、`test_footprint_consistency.py`
+  の期待値、関連READMEを一括更新)。**アームが中立姿勢以外に動いている間はこの限りではない**
+  (2Dfootprintは静的な矩形なので、動くアームの可動範囲全体を安全にカバーしているわけではない。
+  Issue #66のデモでは「ナビゲーション中はアーム中立固定、停止後にのみ動かす」という
+  前提を崩さないこと)
 
 ## 9. 次にやること(Issue #66)
 
-- D1アーム用のPID/ゲイン調整(§8、重力による可動域端への張り付きを解消)
 - 「J1(ベース旋回)+もう1軸を直接joint-space角度指定で動かし、残り4軸は中立姿勢固定」
   というsim/実機共通ロジック(`docs/計画/アーム動作.md` §3-1)を、`/robot1/d1_arm_controller/commands`
-  へpublishするノードとして実装
+  へpublishするノードとして実装。設計(2026-09-08時点):
+  - トリガー: `goal_pose_bridge.py`に数行追加し、`NavigateToPose`の結果が`STATUS_SUCCEEDED`の
+    ときだけ`/goal_reached`(`std_msgs/msg/Bool`)をpublishする(既存ノードへの小さな追加で済ませる)
+  - 新ノード(`ros2_ws/src`に新規パッケージ、仮に`d1_arm_demo`)が`/goal_reached`を購読し、
+    トリガーされたらウェイポイント列を`step_interval_sec`(パラメータ化、simでは短め・
+    実機では30秒程度)ごとに`/robot1/d1_arm_controller/commands`へpublish
 - 静的TF・関節軸の実機照合は実機到着後(Issue #65の残タスク、§8前半2点)
