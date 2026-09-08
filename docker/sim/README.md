@@ -44,6 +44,24 @@ docker compose stop
 存在のため、**消えたまま復活しない**。ロボットが消えた場合は`docker compose restart`で
 launchシーケンス(spawn含む)をやり直す必要がある。
 
+## マーカー基準の接近制御を動かす（#74）
+
+`ros2_ws/src/marker_approach` の接近制御を、このコンテナの中で動かせる。
+compose.yaml が `ros2_ws` を `/ros2_ws`、`docker/sim/tools` を `/sim_tools` へ
+読み取り専用でマウントしている。
+
+```bash
+SIM_ENABLE_NAV2=false docker compose up -d   # 計測するならNav2は切る
+./tools/start_ground_truth.sh                # 真値publisher
+./tools/sim_up.sh --place --go               # apriltag+橋渡し+接近制御を起動して開始
+```
+
+**接近制御はホスト(Humble)からではなく、このコンテナ(Jazzy)の中で動かすこと。**
+ホストから `/tf` を受けようとすると `invalid data size, at serdata.cpp` で失敗する
+（ディストロ跨ぎのシリアライズ非互換）。標準型なら跨いで通るという前提は、
+少なくともTFでは成り立たない。詳細は `tools/README.md` と
+`ros2_ws/src/marker_approach/README.md`。
+
 ## 本体(upstream)との差分・注意点
 
 - **`external/go2_ros2_sim_py` は自分のfork(`kokekokko481576/go2_ros2_sim_py`、public)を参照**。
