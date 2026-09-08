@@ -22,6 +22,13 @@ services:
       - GZ_SIM_RESOURCE_PATH=/root/ws/src/gazebo_sim/models
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
+      # マーカー接近制御(ros2_ws/src/marker_approach)と sim用ツールを、コンテナの中から
+      # 使えるようにする。**接近制御はこのコンテナ(Jazzy)で動かす必要がある**——
+      # ホスト(Humble)から /tf を受けると `invalid data size, at serdata.cpp` で
+      # 失敗するため（ディストロ跨ぎのシリアライズ非互換）。
+      # 読み取り専用。ビルドはせず PYTHONPATH で読む（pure python なので通る）。
+      - ../../ros2_ws:/ros2_ws:ro
+      - ./tools:/sim_tools:ro
     devices:
       - /dev/dri:/dev/dri
     # SIM_ENABLE_NAV2=false でupstream Nav2スタックを起動しない(GATE1計測用、Issue #35)。
