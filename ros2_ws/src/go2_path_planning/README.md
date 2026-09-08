@@ -164,7 +164,7 @@ goal_pose_bridge ──NavigateToPose アクション──▶ bt_navigator
 | `rolling_window` | `false` | 地図全域を対象（ローリング窓を使わない） |
 | `track_unknown_space` | `true` | 未知空間を区別して扱う |
 | `resolution` | `0.05` | セル解像度[m] |
-| `footprint` | `[[0.35,0.18],[0.35,-0.18],[-0.38,-0.18],[-0.38,0.18]]` | ロボット外形。`go2_path_following` の local_costmap と同じ共有定義（C5） |
+| `footprint` | `[[0.37,0.18],[0.37,-0.18],[-0.38,-0.18],[-0.38,0.18]]` | ロボット外形。`go2_path_following` の local_costmap と同じ共有定義（C5） |
 | `plugins` | `["static_layer", "obstacle_layer", "inflation_layer"]` | 生M2(static+inflation)に生M3(obstacle_layer)を追加した3層構成（`docs/計画/経路生成.md` §3.3） |
 | `always_send_full_costmap` | `true` | 差分ではなく全コストマップを配信 |
 

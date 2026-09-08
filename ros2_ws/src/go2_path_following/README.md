@@ -237,7 +237,7 @@ M2(平地の経路追従)は障害物回避を完了条件に含めない(計画
 | `rolling_window` | `true`(ロボット追従の移動窓) |
 | `width` × `height` / `resolution` | `10` × `10` [m] / `0.05` [m/cell] |
 | `update_frequency` / `publish_frequency` | `5.0` / `2.0` [Hz] |
-| `footprint` | `[[0.35,0.18],[0.35,-0.18],[-0.38,-0.18],[-0.38,0.18]]`(Go2の外形) |
+| `footprint` | `[[0.37,0.18],[0.37,-0.18],[-0.38,-0.18],[-0.38,0.18]]`(Go2の外形) |
 | `plugins` | `["inflation_layer"]`(`cost_scaling_factor: 4.0` / `inflation_radius: 0.45`) |
 
 #### lifecycle_manager_navigation

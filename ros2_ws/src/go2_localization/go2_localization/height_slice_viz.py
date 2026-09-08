@@ -40,7 +40,7 @@ class HeightSliceViz(Node):
         self.declare_parameter('max_height', 0.3)
 
         # 本体(脚含む)の自己反射除外用の矩形(target_frame相対、Nav2 footprintと同じ値を既定に
-        # 流用: go2_path_following/go2_path_planningのfootprint「[[0.35,0.18],[0.35,-0.18],
+        # 流用: go2_path_following/go2_path_planningのfootprint「[[0.37,0.18],[0.37,-0.18],
         # [-0.38,-0.18],[-0.38,0.18]]」)。range_minだけでは歩容で脚が前に振り出された時に
         # 除外しきれず、本体の一部が障害物として地図に焼き付く(歩き回るほど地図がえぐれる)。
         # 【重複注意】同じ矩形がconfig/pointcloud_to_laserscan.yaml(body_exclude_*)・
@@ -53,7 +53,7 @@ class HeightSliceViz(Node):
         # には各脚の実際の関節位置をTFで追って除外範囲にする必要があるが、今回はそこまで
         # 実装しておらず、静的な矩形での簡易対応にとどめている
         self.declare_parameter('body_exclude_min_x', -0.38)
-        self.declare_parameter('body_exclude_max_x', 0.35)
+        self.declare_parameter('body_exclude_max_x', 0.37)
         self.declare_parameter('body_exclude_min_y', -0.18)
         self.declare_parameter('body_exclude_max_y', 0.18)
 
