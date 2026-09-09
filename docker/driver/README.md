@@ -12,6 +12,9 @@
 - `go2_sport_bridge`(自作): `cmd_vel`(経路追従の安全フィルタ出力)を工場出荷状態の歩容
   (Sport Mode API)のMove命令に変換して配信。Isaac Lab学習を使わず、devコンテナのテレオペ/Nav2の
   `cmd_vel`だけで実機を歩かせたい場合の橋渡し(下記「cmd_vel→工場出荷歩容ブリッジ」参照)
+- `d1_sdk`(Unitree提供サンプル): 背面D1-Tアームの疎通用(Issue #63)。Go2のSport Mode APIとは
+  別系統で`unitree_sdk2`のDDSチャネル層を直接使うため、ROS2ノードではなく`run.sh`経由の
+  ビルド済みバイナリとして持つ(下記「D1-Tアーム」参照)
 
 ## cmd_vel→工場出荷歩容ブリッジ(`go2_sport_bridge`)
 
@@ -47,6 +50,44 @@ docker compose exec ros2 ros2 run teleop_twist_keyboard teleop_twist_keyboard --
 ループバック(`GO2_NIC`未指定)での動作確認は済み(下記「動作確認結果」)。
 StandUp前にMoveを送っても効果が無い/意図しない挙動の可能性があるため、
 起立(`go2_sport_client 4`または`1`=BalanceStand)を先に必ず実行すること。
+
+### 非常停止と単軸ジョグ
+
+```bash
+# 1軸だけ短時間動かして符号・速さを確かめる(初回は必ずこれから)
+docker compose exec driver ros2 run go2_sport_bridge jog.sh vx 0.20 1.0
+
+# 非常停止。別ターミナルで常に打てる状態にしてから走らせること
+docker compose exec driver ros2 run go2_sport_bridge estop.sh
+```
+
+`jog.sh`は`/cmd_vel`を直接叩く(dev側の`cmd_vel_safety`を経由しない)。
+`estop.sh`はブリッジを`pkill`してから停止指令を3秒間直接送る。**ブリッジを落とすだけでは
+止まらない**(機体が最後の指令のまま歩き続ける恐れがある)ため、この順序が要る。
+
+### 実機で踏んだ罠(2026-09-02 実測、別プロジェクトでの検証結果を反映)
+
+ループバック検証では出ない、**実機でしか現れない**問題。ブリッジ実装(`cmd_vel_to_sport_node.py`)
+は以下を織り込んである。
+
+- **リクエストIDを毎回変えないと機体が動かない**。同じ`header.identity.id`で同じ内容を送り
+  続けると、機体が重複指令とみなして無視する。指令値が完全に一定になった瞬間から実速度が
+  0.0000m/sになり、値が変わった瞬間だけ動く、という形で現れる。テレオペでキーを押しっぱなしに
+  すると`Twist`が一定値になるため、まさにこの条件に入る。unitree_ros2同梱の例(`cmd_vel_control.cpp`)
+  は`id`を設定しないので、そのままでは連続的な速度制御ができない
+- **機体が「通常モード」でないとMoveを受けても歩かない**。起立させただけでは足りない。
+  DDS上は指令が正常に流れているように見えるため、原因の切り分けが難しい
+- **StopMoveを連投してはいけない**。20Hzで送り続けると機体の移動指令の受け付けを妨げ、
+  リモコン操作とも競合する。ウォッチドッグ作動時は「遷移時にStopMoveを1回」+
+  「以降はゼロ速度のMoveのみ」にしてある
+- **0.15m/s程度がGo2の歩容の下限**。それ未満は胴体が揺れるだけで前に進まない。
+  「まず低速から」と思って0.1m/s以下で試すと「動かない」と誤認する
+- **横移動(`linear.y`)はほとんど効かない。それどころか前進を殺す**。`vy=-0.056`程度でも
+  実速度がゼロになった。正対に近い接近では`vy`を0にして前進と旋回だけで組むこと
+- **`obstacles_avoid`経由(障害物回避あり)は物理リモコンを奪う**。回避を効かせるには
+  `UseRemoteCommandFromApi(true)`の送信が要るが、これを送ると物理リモコンが操作不能になった
+  (電源再投入または`UseRemoteCommandFromApi(false)`で復帰)。リモコンは最後の非常停止手段
+  なので、本ブリッジは`/api/sport/request`経路のみを使い、機体側の設定には一切触らない
 
 ## 使い方
 
@@ -95,6 +136,37 @@ GO2_NIC=enp3s0 docker compose up -d
 - 実機Go2との有線LAN接続でのDDS通信(`GO2_NIC`に実NIC名を指定しての検証)
 - `unitree_ros2_example` の各サンプル(sport_client等)を実機相手に実行しての動作確認
 
+## D1-Tアーム(`d1_sdk`)
+
+背面アームD1-Tの疎通確認用サンプル一式。使い方・注意点は
+[`d1_sdk/README.md`](d1_sdk/README.md) を参照。
+
+```bash
+docker compose exec driver /root/d1_sdk/run.sh              # 実行ファイル一覧
+docker compose exec driver /root/d1_sdk/run.sh arm_zero_control
+```
+
+**バイナリを直接叩かず、必ず `run.sh` を通すこと。** `unitree_sdk2` が
+`/usr/local/lib` に置くCycloneDDSはROS2 Humbleのものと**ABIが違い**、
+ROS2側が先に解決されると `free(): invalid pointer` で落ちる。
+`run.sh` が `LD_LIBRARY_PATH` を先頭に付けてこれを回避する。
+同じ理由で **Dockerfileでは `ldconfig` を実行していない**
+(実行するとROS2のノード側が `/usr/local/lib` のCycloneDDSを掴んで落ちる)。
+
+動作確認(2026-09-04、開発PC: Ubuntu22.04、**アーム実機なし**):
+
+- イメージビルド成功。6実行ファイル(`arm_zero_control`/`get_arm_joint_angle`/
+  `joint_angle_control`/`joint_enable_control`/`multiple_joint_angle_control`/
+  `restore_initial_pose`)が `/root/d1_sdk/build` に生成されることを確認
+- `ldd` で `libddsc.so.0`/`libddscxx.so.0` が `/usr/local/lib` 側に解決されること、
+  かつ `ldconfig -p` にそれらが**載っていない**ことを確認(ROS2側への影響なし)
+- ROS2環境をsourceした同一シェルでD1サンプルを実行しても
+  `free(): invalid pointer` が出ず正常終了すること、および同じコンテナで
+  `go2_sport_bridge` が正常に起動することを確認
+
+未実施(アーム実機が必要なため): コマンドが実際にアームに届くか、feedbackを受信できるか、
+低頻度コマンドでの信頼性(Issue #63の完了条件)。
+
 ## `go2_sport_bridge` 動作確認結果(2026-08-03、開発PC: Ubuntu22.04、ループバック)
 
 - イメージビルド成功(`go2_sport_bridge`パッケージ追加。`ros2 pkg executables go2_sport_bridge`で
@@ -110,3 +182,28 @@ GO2_NIC=enp3s0 docker compose up -d
 - 実機Go2への有線LAN接続でのMove配信・起立→歩行の実挙動確認(Issue #3)
 - devコンテナの`cmd_vel_safety`・`teleop_twist_keyboard`からのコンテナ跨ぎ結合(dev⇔driver。
   dev⇔sim(Jazzy)での実績はあるが、dev⇔driver間では今回は未実施)
+
+## `go2_sport_bridge` 動作確認結果(2026-09-04、開発PC: Ubuntu22.04、ループバック、#71)
+
+実機実測を反映した改修(リクエストID・StopMoveの扱い・終了時停止・速度クランプ)の検証。
+
+- `ros2 pkg executables go2_sport_bridge`に`estop.sh`・`jog.sh`が実行ファイルとして
+  登録されること(`ros2 run`から呼べること)を確認
+- **リクエストIDが毎回変わること**を確認。`linear.x=0.3, angular.z=0.2`を固定値で
+  20Hz注入し続けても、`header.identity.id`が
+  `1788495624411076906` → `...625361218165` → `...626261152899` と毎回異なる
+  (`parameter`は同一)。**改修前は常に`id: 0`だった**
+- 速度クランプを確認。`linear.x=0.9`を注入 → `parameter={"x": 0.3, ...}`
+  (既定`max_vx=0.3`でクランプ)
+- **StopMoveを連投しないこと**を確認。約14秒の観測でMove(1008)が502件に対し
+  StopMove(1003)は3件のみ(ウォッチドッグ遷移2回 + 終了時1回)
+- **終了時に停止指令が出ること**を確認。SIGINT送出後、最後に配信されたメッセージが
+  StopMove(1003)であること、プロセスが残らず終了することを確認
+- SIGTERM(`docker stop`相当)でも同様に終了することを確認
+- `estop.sh`のE2E確認。ブリッジ稼働中に実行 → ブリッジのプロセスが消え、
+  StopMove(1003)とゼロ速度Moveが配信されることを確認
+- `estop.sh`が**購読者不在でもハングせず3.4秒で完走する**ことを確認
+  (`ros2 topic pub --once`は既定で購読者を待つため`-w 0`が必須)
+
+未実施(実機が必要なため): 上記はいずれもループバックでの確認であり、
+**「機体が実際に歩くか」は実機でしか確認できない**(Issue #3)。

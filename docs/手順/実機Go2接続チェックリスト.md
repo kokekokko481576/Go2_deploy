@@ -50,6 +50,18 @@ CycloneDDSがそのNICで起動できない**点を踏まえて手順を組む�
 
 ## 接続当日の手順
 
+### 実測結果(2026-09-04、初接続)
+
+**DDS疎通までは通った。歩行(下記3)はまだ未実施。**
+
+- ホストNIC: `enp2s0`、`192.168.123.51/24`(公式READMEの`.99`でなくても通る)
+- Go2実機: `192.168.123.161`。`ping` 0% loss / 0.27ms
+- driverコンテナから実機トピック **121本** を確認
+  (`/sportmodestate` `/lowstate` `/utlidar/cloud` `/api/sport/request` `/wirelesscontroller` 他)
+- 実データも届いている: バッテリ soc 66% / `power_v` 30.11V、`body_height` 0.321(起立中)
+- `go2_sport_bridge` の `cmd_vel_to_sport_node` は起動成功
+  (20Hz、watchdog 0.5s、上限 vx=0.3 vy=0.2 wz=0.5)。cmd_vel未受信時のウォッチドッグ作動も確認
+
 ### 0. 事前確認
 
 - [ ] Go2本体の電源・起立可能な状態(地面に安全に置ける場所)を確保
@@ -95,7 +107,29 @@ GO2_NIC=enp2s0 docker compose up -d
       (`/sportmodestate`, `/lowstate` 等、unitree_ros2 README参照)が出ることを確認
 - [ ] `ros2 doctor`: エラー無し
 
+**`GO2_NIC` を渡し忘れると既定の `lo` で起動し、実機は一切見えない**(2026-09-04に踏んだ)。
+`lo` のときは `setup_dds.sh` がユニキャスト探索(`AllowMulticast=false` + `Peer 127.0.0.1`)に
+切り替わるため、実機のマルチキャストSPDPが届かない。`docker inspect go2-driver` の
+`GO2_NIC` を見れば起動時の値が分かる。
+
+**さらに紛らわしいのが `ros2 topic list` で、これは ros2 daemon のキャッシュを返す。**
+`GO2_NIC=lo` で実機が見えていない状態でも、以前の探索結果を引きずって
+実機トピック121本を表示した。**疎通確認は必ず `--no-daemon` を付けて行うこと**
+(`lo` のままなら `/parameter_events` と `/rosout` の2本しか出ない)。
+`ros2 topic hz` は `--no-daemon` を受け付けないので、確認は `topic list` / `topic echo` で行う。
+
+```bash
+docker exec go2-driver bash -c 'source /setup_dds.sh; ros2 topic list --no-daemon'
+```
+
+NICを直すときは `docker compose down` してから `up -d` する
+(`--force-recreate` では古いコンテナが残ることがある)。
+
 ### 3. 起立 → cmd_velブリッジ起動 → テレオペ
+
+**先に「起立させただけでは歩かない」ことを頭に入れておく。** 機体が「通常モード」でないと
+Move命令を受け付けても歩かない。DDS上は指令が正常に流れて見えるため、これを知らないと
+原因の切り分けで時間を溶かす(2026-09-02 実測)。
 
 ```bash
 # driverコンテナ: 起立
@@ -104,23 +138,52 @@ docker compose exec driver ros2 run unitree_ros2_example go2_sport_client 4   # 
 # driverコンテナ: cmd_vel→Moveブリッジ
 docker compose exec driver ros2 run go2_sport_bridge cmd_vel_to_sport_node
 
+# driverコンテナ: **非常停止用**。別ターミナルで打てる状態にしてから先に進む
+docker compose exec driver ros2 run go2_sport_bridge estop.sh
+```
+
+まず**テレオペではなく`jog.sh`で1軸ずつ**確認する。テレオペはキー1つで複数軸が同時に動き、
+符号が逆だったときに何が起きたのか分からなくなる。
+
+```bash
+# driverコンテナ: 1軸ずつ(前進 / 左 / 左旋回)。正の向きは REP-103
+docker compose exec driver ros2 run go2_sport_bridge jog.sh vx 0.20 1.0
+docker compose exec driver ros2 run go2_sport_bridge jog.sh wz 0.30 1.0
+```
+
+- [ ] `jog.sh vx 0.20 1.0` で前進する(**0.15m/s未満では進まない**。下記「安全上の注意」参照)
+- [ ] `jog.sh wz 0.30 1.0` で左(反時計回り)に旋回する
+- [ ] 指令を止めてからウォッチドッグが作動し、Go2が停止することを確認
+- [ ] `estop.sh` で確実に停止することを確認
+
+1軸ずつの符号・速さが正しいことを確認してから、テレオペに進む。
+
+```bash
 # devコンテナ: 安全フィルタ
-docker compose exec ros2 ros2 run cmd_vel_safety cmd_vel_safety_node
+docker compose exec ros2 ros2 run cmd_vel_safety cmd_vel_safety_node \
+  --ros-args -p max_linear_x:=0.22 -p max_linear_y:=0.18 -p max_angular_z:=0.45
 
 # devコンテナ: テレオペ(別ターミナル)
 docker compose exec ros2 ros2 run teleop_twist_keyboard teleop_twist_keyboard \
   --ros-args -r cmd_vel:=cmd_vel_raw
 ```
 
-- [ ] キー入力でGo2が実際に前進・旋回することを確認(まずは低速キーから)
+- [ ] キー入力でGo2が実際に前進・旋回することを確認
 - [ ] テレオペを止めてから0.5秒程度でGo2が停止する(ウォッチドッグ)ことを確認
 
 ### 安全上の注意
 
 - 周囲に十分なスペースを確保し、転倒・衝突しても問題ない環境で行う
+- **`estop.sh`を別ターミナルで打てる状態にしてから走らせる**。ブリッジを`Ctrl-C`で
+  落とすだけでは止まらない場合がある(機体が最後の指令のまま歩き続ける恐れがある)
 - 無線非常停止(ハードウェア)は`cmd_vel_safety`のスコープ外。緊急時は実機の物理停止手段
-  (電源ボタン等)を使う準備をしておく
-- 初回は低速(`cmd_vel_safety`の既定上限: `max_linear_x=1.0`, `max_angular_z=1.0`)から確認する
+  (リモコン・電源ボタン等)を使う準備をしておく。**リモコンが最後の砦**なので、
+  リモコンの操作権をAPIに渡す設定(`UseRemoteCommandFromApi`)では走らせないこと
+- **`cmd_vel_safety`の既定上限(`max_linear_x=1.0`, `max_angular_z=1.0`)は実機には高すぎる。**
+  実機で詰めた実績値は `max_linear_x=0.22` / `max_linear_y=0.18` / `max_angular_z=0.45`
+  (2026-09-02)。上のコマンド例のように明示的に下げてから使う
+- **ただし0.15m/s程度を下回る上限にしてはいけない。** Go2の歩容はそこが下限で、それ未満は
+  胴体が揺れるだけで前に進まない。「まず低速から」と0.1m/s以下で試すと「動かない」と誤認する
 
 ### 4. 顎3D LiDARの搭載位置キャリブレーション(Issue #4・C3)
 
@@ -215,25 +278,84 @@ docker compose exec ros2 ros2 run teleop_twist_keyboard teleop_twist_keyboard \
 
 ### 5. クソ雑map作成(実機M1/M2、Issue #10・#13・#67向け、2026-09-02追加)
 
-1〜4(歩行確認・LiDAR搭載位置)が済んだら、そのまま実機地図の作成に進める。
-`state_to_odom_imu_node`(driverコンテナ、`sportmodestate`→Odometry/Imu変換)+
-`go2_localization mapping_real.launch.py`(devコンテナ、EKF+床除去+slam_toolbox)
-一式を用意済み。**実機・実データでは未検証**なので、手順・トピック名の詳細は
-`ros2_ws/src/go2_localization/README.md`の「実機向け(未検証・下ごしらえ)」節を参照。
+**2026-09-04、実機で slam_toolbox が地図を出すところまで確認した。**
+静止スキャン1枚から 3.35 x 19.35m の地図が立ち、TF `map -> base_link` も解決する。
+歩かせながらの地図成長・保存はまだ実施していない。
 
-- [ ] `ros2 topic echo /sportmodestate`が実データで届くことを確認(未確認ならこの節は保留)
-- [ ] `docker/driver`: `ros2 run go2_sport_bridge state_to_odom_imu_node`を起動
-- [ ] `docker`(dev): `ros2 launch go2_localization mapping_real.launch.py`を起動
+起動は `./docker/driver/real_up.sh` にまとめてある(順序・上書き・自己検定込み)。
+`--motion` を付けない限り機体が動く経路は起動しない。
+
+```bash
+./docker/driver/real_up.sh            # 観測系のみ(機体は動かない)
+./docker/driver/real_up.sh --motion   # 走行系も(cmd_vel_safety + cmd_velブリッジ)
+./docker/driver/real_up.sh status     # 何が動いているか
+./docker/driver/real_up.sh down       # 全部止める
+```
+
+- [x] `ros2 topic echo /sportmodestate`が実データで届くことを確認(2026-09-04)
+- [x] `state_to_odom_imu_node`が実データでOdometry/Imuを出すことを確認(295Hz、2026-09-04)
+- [x] slam_toolboxが`/go2_localization/map`を配信することを確認(2026-09-04)
 - [ ] RViz2(Fixed Frame: map)で地図が広がっていくのを見ながら歩かせる
-- [ ] `ros2 run nav2_map_server map_saver_cli -f <保存先> --ros-args -p save_map_timeout:=5.0`
-      で保存(手順はgo2_localization README参照)
+- [ ] `ros2 run nav2_map_server map_saver_cli -f <保存先> --ros-args -p save_map_timeout:=5.0
+      -r map:=/go2_localization/map` で保存
+
+#### 実機でしか出なかった問題2つ(どちらも黙って壊れる)
+
+**1. 機体の時計が開発PCより1109.7秒(約18.5分)遅れている。**
+`/utlidar/cloud`のstampは機体時計、`state_to_odom_imu_node`のOdometry/Imuは
+開発PCの時計(そのdocstringに書かれている設計判断どおり)。混ざると
+slam_toolboxがスキャン時刻でodom->base_linkを引けず**全スキャンを捨てる**:
+
+```
+Message Filter dropping message: frame 'base_link' at time 1788498317.243
+for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+```
+
+機体の22/tcpは閉じておりログインできないので時刻同期はできない。
+`go2_sport_bridge utlidar_cloud_restamp_node`で受信時に打ち直して中継する。
+オフセットは40秒間で安定していたが、機体時計が跳ねても壊れないよう
+「オフセットを引く」のではなく`now()`で打ち直している。
+
+**2. `mapping_real.launch.py`のままでは床を障害物として地図に焼く。**
+`height_slice_viz`の`cloud_in`が`/utlidar/cloud`に直結されているが、
+床除去の理論距離計算がLiDAR搭載位置TFに依存しており、そのTFは
+`static_tf_real.launch.py`のsim仮値(`pitch=0.35rad`)のままだったため。
+
+実機には**`/utlidar/cloud_base`(ファームウェアが`base_link`座標系で配信、
+frame_id: `base_link`)**があり、これを使えば**未実測の搭載位置TFを迂回できる**。
+あわせて床の高さも実測すると`base_link`相対で**z≈-0.35**(設定値は
+cafe_world由来の-0.27)だった。両方直した効果:
+
+| | 修正前 | 修正後 |
+|---|---|---|
+| 有効ビーム | 241本 中央値0.60m | 107本 中央値1.82m |
+| 1m未満の点 | 81.3%(=床) | **0%** |
+
+`real_up.sh`はslam_toolboxを上げる前にこの比率を測り、30%を超えたら
+**slam_toolboxを起動せずに中断する**(地図に焼き付いてから気づくのを防ぐため)。
+
+**この2つの上書きは`go2_localization`側(担当が別)なので、起動時オプションで
+渡しているだけでファイルには入れていない。** 恒久対応は要相談:
+`height_slice_viz_real.launch.py`に入力トピックと`floor_z`のlaunch引数を足すのが素直。
+
+#### その他、この節で判明したこと
+
+- `/utlidar/cloud`: `sensor_msgs/PointCloud2`、frame_id `utlidar_lidar`、
+  15.4Hz、1スキャン4142点。README記載どおりだった
+- `/utlidar/cloud_base`: 同型で frame_id `base_link`、1スキャン1300〜1450点
+- `/utlidar/cloud_deskewed`: frame_id が `odom`。EKFの`odom`と名前が衝突するので注意
+- `/go2_localization/chin_lidar_scan`のQoSは**BEST_EFFORT**。既定QoS(RELIABLE)で
+  購読すると`incompatible QoS`で1通も受け取れない
+- slam_toolboxの`minimum laser range setting (0.0 m) exceeds the capabilities of
+  the used Lidar (0.4 m)`は`range_min: 0.4`(脚のノイズ除去、Issue #26)由来で想定どおり
 
 ### 未確認・当日確認が必要な事項
 
-- [ ] Go2実機のIPアドレス(固定/DHCPか、具体的な値)
-- [ ] ホストのファイアウォール(ufw等)がマルチキャストDDS探索をブロックしないか
-      (この検証環境ではsudo権限が無く`ufw status`を確認できなかった。当日要確認)
-- [ ] Sport Mode APIの利用に純正アプリ側での事前操作(モード切替等)が必要かどうか
-      (unitree_ros2公式READMEには特記無いが、実機依存の可能性があるため当日要確認)
-- [ ] 顎LiDAR実機のROS2ドライバ(ベンダーSDK)が既に用意されているか
-      (4-2の点群検証に必要。無ければ4-1の実測のみで進める)
+- [x] Go2実機のIPアドレス → `192.168.123.161`(2026-09-04確認)
+- [x] ホストのファイアウォールがマルチキャストDDS探索をブロックしないか
+      → `GO2_NIC=enp2s0` で実機トピックが見えたためブロックされていない(2026-09-04確認)
+- [x] Sport Mode APIの利用に純正アプリ側での事前操作が必要かどうか
+      → **必要**。Unitree Goアプリで運動モードを「通常」にしないと、Moveは受理されるのに
+      脚が出ない(2026-09-02実測)。APIからは切り替えられない
+- [x] 顎LiDAR実機のROS2ドライバ(ベンダーSDK)が既に用意されているか
+      → 不要。`/utlidar/cloud` がDDS接続だけで配信されていることを確認(2026-09-04)
