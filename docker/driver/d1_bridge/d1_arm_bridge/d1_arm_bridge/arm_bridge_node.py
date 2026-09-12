@@ -59,27 +59,16 @@ unitree_sdk2(`/usr/local/lib` の純正 CycloneDDS)を両方リンクすると�
   基本方針にしている
 """
 
-import json
-import math
-
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float64MultiArray
 
 from unitree_arm.msg import ArmString
 
-# `arm_command` の並び（simの d1_arm_controller と同じ）。
-# 6軸はラジアン、グリッパー2軸はメートル。
-N_INPUT = 8
-N_SERVO = 7          # D1 の angle0..angle6
-
-# 公称可動域[度]（`docs/計画/アーム動作.md` §4-1）。J1/J4/J6 が ±135、J2/J3/J5 が ±90。
-JOINT_LIMIT_DEG = (135.0, 90.0, 90.0, 135.0, 90.0, 135.0)
-
-FUNCODE_MULTI_JOINT = 2
-FUNCODE_ENABLE = 5
-FUNCODE_ZERO = 7
-
+from .conversion import (
+    FUNCODE_MULTI_JOINT, FUNCODE_ZERO, N_INPUT,
+    build_payload, multi_joint_data, to_servo_degrees,
+)
 
 class ArmBridgeNode(Node):
 
@@ -146,10 +135,12 @@ class ArmBridgeNode(Node):
         if not self._interval_ok():
             return
 
-        angles = self._to_servo_degrees(list(msg.data))
-        self._send(FUNCODE_MULTI_JOINT, dict(
-            {'mode': self.mode},
-            **{f'angle{i}': round(a, 2) for i, a in enumerate(angles)}))
+        angles, warnings = to_servo_degrees(
+            list(msg.data), self.signs, self.offsets,
+            self.gripper_open_m, self.gripper_closed_deg, self.gripper_open_deg)
+        for w in warnings:
+            self.get_logger().warn(w)
+        self._send(FUNCODE_MULTI_JOINT, multi_joint_data(self.mode, angles))
 
     def on_zero_pose(self, msg):
         """ゼロ姿勢へ戻す（funcode 7）。安全な初期化・復帰用。"""
@@ -158,28 +149,6 @@ class ArmBridgeNode(Node):
         if not self._interval_ok():
             return
         self._send(FUNCODE_ZERO, None)
-
-    # ------------------------------------------------------------------ 変換
-
-    def _to_servo_degrees(self, values):
-        """`arm_command`(rad + m) を D1 の angle0..angle6(度) へ変換する。"""
-        out = []
-        for i in range(6):
-            deg = math.degrees(values[i]) * self.signs[i] + self.offsets[i]
-            lim = JOINT_LIMIT_DEG[i]
-            if abs(deg) > lim:
-                self.get_logger().warn(
-                    f'J{i + 1} の指令 {deg:+.1f}度 が可動域 ±{lim:.0f}度 を超えています。'
-                    'クランプします')
-                deg = math.copysign(lim, deg)
-            out.append(deg)
-
-        # グリッパー: simの2軸(左右)のうち開き量の大きい方を採り、0..1 に正規化する
-        opening = max(values[6], values[7])
-        ratio = 0.0 if self.gripper_open_m <= 0 else min(max(opening / self.gripper_open_m, 0.0), 1.0)
-        out.append(self.gripper_closed_deg
-                   + ratio * (self.gripper_open_deg - self.gripper_closed_deg))
-        return out
 
     # ------------------------------------------------------------------ 送信
 
@@ -195,12 +164,7 @@ class ArmBridgeNode(Node):
 
     def _send(self, funcode, data):
         self.seq += 1
-        payload = {'seq': self.seq, 'address': self.address, 'funcode': funcode}
-        if data is not None:
-            payload['data'] = data
-        # **separators を詰める。** SDK のサンプルが空白なしの JSON を送っており、
-        # 機体側のパーサが空白を許すか確認できていないため、実物に寄せる
-        text = json.dumps(payload, separators=(',', ':'))
+        text = build_payload(self.seq, self.address, funcode, data)
 
         if self.dry_run:
             self.get_logger().info(f'[dry_run] {text}')

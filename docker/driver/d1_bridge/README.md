@@ -154,6 +154,35 @@ ROS2 側のブリッジが送った JSON をそのまま受信することを確
 SDK と一致すること、`seq` が毎回増えること、`zero_pose`(funcode 7)が通ること、
 可動域超過（J2 に 2.0rad = +114.6度）が ±90度 にクランプされること。
 
+角度の変換そのものは `d1_arm_bridge/conversion.py`（**ROS非依存**）に分けてあり、
+`test/test_angle_conversion.py` で16件のテストがある。**可動域クランプは全6軸を
+正負の両方で押さえている**（外れると実機を壊しうるため）。
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest docker/driver/d1_bridge/d1_arm_bridge/test/ -q
+```
+
+### d1_arm_demo と繋いだ通し（2026-09-13）
+
+`d1_arm_demo`（#66・#74、`ros2_ws/src/`）を上流に繋いで、**到達通知1発から
+機体が受け取るコマンド列までを通した**。角度は sim で決めた2軸の撮影姿勢そのもの。
+
+```
+/goal_reached (Bool) → d1_arm_demo → arm_command(rad) → arm_bridge_node → rt/arm_Command
+
+[probe] 受信 #1: {"seq":1,...,"data":{"mode":1,"angle0":0.0,"angle1":0.0,...}}      中立
+[probe] 受信 #2: {"seq":2,...,"data":{"mode":1,"angle0":89.95,"angle1":0.0,...}}    j1: 右真横へ
+[probe] 受信 #3: {"seq":3,...,"data":{"mode":1,"angle0":89.95,"angle1":68.75,...}}  j2: 俯角（撮影姿勢）
+[probe] 受信 #4: {"seq":4,...,"data":{"mode":1,"angle0":0.0,"angle1":0.0,...}}      中立へ復帰
+```
+
+**1関節ずつ動く**（Gazeboで多関節同時指令が j1 を可動域上限へ走らせた件の回避）ことも、
+`seq` が 1→4 と増えることも、このログで確認できる。
+
+実機では `d1_arm_demo` が dev コンテナ、このブリッジが driver コンテナに分かれ、
+両者は DDS 越しに繋がる。**これは `cmd_vel` が既に通っている経路と同じ**
+（`cmd_vel_safety`(dev) → `go2_sport_bridge`(driver)）なので、新しいリスクは無い。
+
 **残るのは実機固有の部分だけ**: 機体が実際にこの JSON を受理するか、
 関節の回転方向、グリッパー `angle6` の対応。
 
