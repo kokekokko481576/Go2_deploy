@@ -1,0 +1,4 @@
+このディレクトリは colcon のワークスペースから除外する。
+中身は unitree_sdk2 に直接リンクする素のcmakeプロジェクトで、ROS2のパッケージではない。
+これが無いと colcon が CMakeLists.txt を見てパッケージとして拾い、
+/root/d1_sdk/src がまだ無い段階でビルドしようとして失敗する。
