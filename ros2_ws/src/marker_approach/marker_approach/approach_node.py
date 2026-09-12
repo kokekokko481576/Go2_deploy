@@ -170,6 +170,11 @@ class ApproachNode(Node):
 
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel_raw', 10)
         self.state_pub = self.create_publisher(String, '~/state', 10)
+        # 到達したときだけ True を1回出す。**打ち切り・失敗・見失いでは出さない。**
+        # #66 の goal_pose_bridge.py が NavigateToPose の STATUS_SUCCEEDED でだけ出すのと
+        # 同じ契約にしてあり、下流のアーム側ノードはトリガ源(Nav2 / マーカー接近)を
+        # 区別せずに購読できる。相対名なので既定で /goal_reached に解決する。
+        self.reached_pub = self.create_publisher(Bool, 'goal_reached', 10)
         self.create_subscription(PoseStamped, 'marker_pose', self.on_pose, 10)
         self.create_subscription(DiagnosticArray, 'marker_diagnostics', self.on_diag, 10)
         self.create_subscription(Bool, '~/enable', self.on_enable, 10)
@@ -359,6 +364,8 @@ class ApproachNode(Node):
                 'マーカーへ向き直してから停止します')
 
         if cmd.done:
+            if cmd.success:
+                self.reached_pub.publish(Bool(data=True))
             self.disable(cmd.reason, error=not cmd.success)
             return
 
