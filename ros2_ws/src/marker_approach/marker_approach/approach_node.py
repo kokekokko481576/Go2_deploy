@@ -64,45 +64,55 @@ def quat_to_matrix(q):
 class ApproachNode(Node):
 
     # ROSパラメータ名 -> (既定値, 制御則のパラメータ名)。角度は度で受けて rad に直す
+    # 制御則のパラメータ。**既定値は Params から取る（ここには書かない）。**
+    # 以前はここに数値を並べていたが、`turn_drive_turn.Params` と二重管理になり、
+    # **実際に食い違っていた**（2026-09-23: Params を実機実測値へ更新しても、
+    # ノード側の古い既定値が declare で上書きしていた）。
+    # (ROSパラメータ名, Params の属性名)。末尾が _deg のものは度で受けて rad に直す。
     CONTROL_PARAMS = [
-        ('standoff', 0.65, 'standoff'),
-        ('pos_tolerance', 0.06, 'pos_tolerance'),
-        ('ang_tolerance_deg', 5.2, 'ang_tolerance'),
-        ('k_x', 0.6, 'k_x'),
-        ('k_yaw', 1.0, 'k_yaw'),
-        ('max_vx', 0.20, 'max_vx'),
-        ('max_wz', 0.40, 'max_wz'),
-        ('min_translation_speed', 0.15, 'min_translation_speed'),
-        ('min_wz', 0.30, 'min_wz'),
-        ('turn_tolerance_deg', 5.2, 'turn_tolerance'),
-        ('redirect_tolerance_deg', 15.0, 'redirect_tolerance'),
-        ('stop_lead_distance', 0.05, 'stop_lead_distance'),
-        ('turn_lead_angle_deg', 4.0, 'turn_lead_angle'),
-        ('fov_budget_deg', 25.0, 'fov_budget'),
-        ('drive_bearing_limit_deg', 33.0, 'drive_bearing_limit'),
-        ('settle_time', 0.7, 'settle_time'),
-        ('max_cycles', 8, 'max_cycles'),
-        ('min_progress', 0.03, 'min_progress'),
-        ('min_ambiguity', 2.0, 'min_ambiguity'),
-        ('normal_alpha', 0.3, 'normal_alpha'),
+        ('standoff', 'standoff'),
+        ('pos_tolerance', 'pos_tolerance'),
+        ('ang_tolerance_deg', 'ang_tolerance'),
+        ('k_x', 'k_x'),
+        ('k_yaw', 'k_yaw'),
+        ('max_vx', 'max_vx'),
+        ('max_wz', 'max_wz'),
+        ('min_translation_speed', 'min_translation_speed'),
+        ('min_wz', 'min_wz'),
+        ('turn_tolerance_deg', 'turn_tolerance'),
+        ('redirect_tolerance_deg', 'redirect_tolerance'),
+        ('stop_lead_distance', 'stop_lead_distance'),
+        ('turn_lead_angle_deg', 'turn_lead_angle'),
+        ('fov_budget_deg', 'fov_budget'),
+        ('drive_bearing_limit_deg', 'drive_bearing_limit'),
+        ('settle_time', 'settle_time'),
+        ('max_cycles', 'max_cycles'),
+        ('min_progress', 'min_progress'),
+        ('min_ambiguity', 'min_ambiguity'),
+        ('normal_alpha', 'normal_alpha'),
         # False にすると「マーカーの手前（視線上の standoff 点）」を狙う。
         # 届かない配置がなくなる代わりに、法線からのずれが残ったまま止まる
-        ('use_normal', True, 'use_normal'),
+        ('use_normal', 'use_normal'),
         # 到達後の最終姿勢。'right'/'left' はマーカーを真横に入れる旋回を足す。
         # **この旋回にはヨー角の観測が要る**（下の yaw_source）
-        ('final_heading', 'marker', 'final_heading'),
-        ('side_turn_angle_deg', 90.0, 'side_turn_angle'),
+        ('final_heading', 'final_heading'),
+        ('side_turn_angle_deg', 'side_turn_angle'),
     ]
 
     def __init__(self):
         super().__init__('marker_approach_node')
 
-        for name, default, _ in self.CONTROL_PARAMS:
-            self.declare_parameter(name, default)
+        defaults = Params()
+        for name, ctl_name in self.CONTROL_PARAMS:
+            v = getattr(defaults, ctl_name)
+            self.declare_parameter(name, math.degrees(v) if name.endswith('_deg') else v)
         # base_link -> カメラ の取り付け（**実測して置き換えること**）
-        self.declare_parameter('camera_x', 0.0)
+        # 2026-09-23 実機実測: 前脚の股関節軸→レンズ中心140mm、trunk原点は股関節軸の
+        # 中点なので 193.4+140=333mm。高さは 床→レンズ160mm - 床→股関節軸125mm。
+        # **0.0 のままだとマーカーを見失う**（tools/sim_approach.py で30本中21本）。
+        self.declare_parameter('camera_x', 0.333)
         self.declare_parameter('camera_y', 0.0)
-        self.declare_parameter('camera_z', 0.0)
+        self.declare_parameter('camera_z', 0.035)
         self.declare_parameter('camera_pitch_deg', 0.0)   # 下向きを正
         # 安全
         self.declare_parameter('min_distance', 0.35)      # これより近づいたら停止[m]
@@ -140,7 +150,7 @@ class ApproachNode(Node):
         rate = g('rate')
 
         kw = {}
-        for name, _, ctl_name in self.CONTROL_PARAMS:
+        for name, ctl_name in self.CONTROL_PARAMS:
             v = g(name)
             kw[ctl_name] = math.radians(v) if name.endswith('_deg') else v
         # 視野の判定はカメラ位置で行う（base_linkではない）ので取り付けを渡す
