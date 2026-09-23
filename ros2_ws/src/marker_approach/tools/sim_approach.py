@@ -6,9 +6,9 @@
 
 模擬している実測値（すべて2026-09-02の実機計測。出典は README と memory）:
 
-  - **歩容の下限速度**: 0.10m/s 未満の指令では脚が踏み出さない（胴体だけ動く）
-  - **前進効率83%**: vx=0.15 の指令で実速度 0.125m/s
-  - **指令の遅れ0.3s**: これが停止時の行き過ぎ（実測47mm）を生む
+  - **歩容の下限速度**: 0.20m/s 未満の指令では脚が踏み出さない（2026-09-23に更新）
+  - **前進/旋回の応答は一次式**: v = 1.0824*cmd - 0.1517 / w = 0.5699*cmd - 0.1572
+  - **指令の遅れは前進0.42s・旋回0.77s**: 行き過ぎ 0.120m と 18.3度 を生む
   - **視野 水平±46度**、150mmタグの実用距離 3m
   - **姿勢の曖昧性**: 視線と法線のなす角 0度→1.8 / 7度→1.1 / 31度→44。
     曖昧性が低いと法線の方位が±7度暴れる
@@ -19,9 +19,9 @@
   歩容の横滑り、床の摩擦差、検出の脱落、機体の揺れによる観測ノイズの実分布。
 
 使い方:
-  python3 ros2_ws/src/marker_approach/tools/sim_approach.py            # 既定シナリオ一式
-  python3 ros2_ws/src/marker_approach/tools/sim_approach.py --trace    # 1周期ごとの状態も出す
-  python3 ros2_ws/src/marker_approach/tools/sim_approach.py --line-of-sight   # 「マーカーの手前まで行く」モード
+  python3 tools/sim_approach.py            # 既定シナリオ一式
+  python3 tools/sim_approach.py --trace    # 1周期ごとの状態も出す
+  python3 tools/sim_approach.py --line-of-sight   # 「マーカーの手前まで行く」モード
 """
 import argparse
 import math
@@ -29,21 +29,30 @@ import random
 import sys
 from pathlib import Path
 
-# このツールはパッケージ内 tools/ にある。制御則を直接 import するため親を通す
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from marker_approach.turn_drive_turn import Params, TurnDriveTurn, wrap  # noqa: E402
 
 # --- 実機の特性（実測） ---
-CAM_X = 0.32715          # base_link -> カメラ 前方[m]
+CAM_X = 0.333            # base_link -> カメラ 前方[m]（2026-09-23 実機実測）
 FOV_HALF = math.radians(46.0)
 MAX_RANGE = 3.0          # 150mmタグの実用距離[m]
 MAX_INCIDENCE = math.radians(70.0)   # これ以上斜めだと四角形が潰れて検出が落ちる
-WALK_DEADBAND = 0.10     # これ未満の vx 指令では進まない[m/s]
-WALK_EFFICIENCY = 0.83
-TURN_DEADBAND = 0.20     # これ未満の wz 指令では回らない[rad/s]
-TURN_EFFICIENCY = 0.80
-COMMAND_LATENCY = 0.30   # 指令が実速度に現れるまで[s]
-HEADING_DRIFT = 0.02     # 直進1mあたりの向きのずれ[rad]（片側へ寄る癖）
+# --- 指令→実速度（2026-09-23 実機実測で全面改訂）---
+# **効率を掛ける形では合わない。** 実測は一次式に乗る（残差: 前進12mm/s・旋回0.02rad/s以下）。
+#   前進 指令:実速度 = 0.25:0.107 / 0.30:0.181 / 0.35:0.234 / 0.40:0.285 / 0.50:0.383 [m/s]
+#   旋回 指令:実角速度 = 0.40:0.060 / 0.60:0.205 / 0.80:0.290 / 1.00:0.412 [rad/s]
+#     （旋回は「総方位変化 - 行き過ぎ」を指令2秒で割った値）
+# 改訂前は 前進下限0.10・効率0.83、旋回下限0.20・効率0.80 だったが、
+# **どちらも実機より甘い**。0.20m/s の前進指令は実際には踏み出さない（#74 の正体）。
+WALK_DEADBAND = 0.20     # これ未満の vx 指令では進まない[m/s]（実測: 0.20で実動率34%）
+WALK_GAIN, WALK_OFFSET = 1.0824, 0.1517      # v = GAIN*cmd - OFFSET（ゼロ交差 0.140）
+TURN_DEADBAND = 0.35     # これ未満の wz 指令は実用にならない[rad/s]（ゼロ交差 0.276）
+TURN_GAIN, TURN_OFFSET = 0.5699, 0.1572      # w = GAIN*cmd - OFFSET
+# **遅れは前進と旋回で倍違う。** 停止の行き過ぎ(実測0.120m @0.285m/s)からは0.42秒、
+# 旋回の行き過ぎ(実測18.3度 @0.412rad/s)からは0.77秒。1つの値では両方を再現できない。
+COMMAND_LATENCY = 0.42       # 前進[s]
+TURN_LATENCY = 0.77          # 旋回[s]
+HEADING_DRIFT = 0.025    # 直進1mあたりの向きのずれ[rad]（実測: 3.5mで横0.15m）
 CAM_FPS = 14.4
 LOST_TIMEOUT = 0.5
 MAX_RUNTIME = 90.0
@@ -60,19 +69,29 @@ class Go2Sim:
 
     def __init__(self, x, y, yaw, seed=0):
         self.x, self.y, self.yaw = x, y, yaw
-        self.queue = []          # (適用時刻, vx, wz)
+        self.queue = []          # (適用時刻, vx)   前進
+        self.wqueue = []         # (適用時刻, wz)   旋回。遅れが前進と違うので別に持つ
         self.vx = self.wz = 0.0
         self.rng = random.Random(seed)
         self.path = 0.0
 
     def command(self, now, vx, wz):
-        self.queue.append((now + COMMAND_LATENCY, vx, wz))
+        self.queue.append((now + COMMAND_LATENCY, vx))
+        self.wqueue.append((now + TURN_LATENCY, wz))
+
+    @staticmethod
+    def _respond(cmd, deadband, gain, offset):
+        if abs(cmd) < deadband:
+            return 0.0
+        return math.copysign(max(0.0, gain * abs(cmd) - offset), cmd)
 
     def advance(self, now, dt):
         while self.queue and self.queue[0][0] <= now:
-            _, vx, wz = self.queue.pop(0)
-            self.vx = 0.0 if abs(vx) < WALK_DEADBAND else vx * WALK_EFFICIENCY
-            self.wz = 0.0 if abs(wz) < TURN_DEADBAND else wz * TURN_EFFICIENCY
+            _, vx = self.queue.pop(0)
+            self.vx = self._respond(vx, WALK_DEADBAND, WALK_GAIN, WALK_OFFSET)
+        while self.wqueue and self.wqueue[0][0] <= now:
+            _, wz = self.wqueue.pop(0)
+            self.wz = self._respond(wz, TURN_DEADBAND, TURN_GAIN, TURN_OFFSET)
         ds = self.vx * dt
         self.x += ds * math.cos(self.yaw)
         self.y += ds * math.sin(self.yaw)
@@ -204,6 +223,16 @@ def run(dist, alpha_deg, yaw_off_deg, params, seed=0, trace=False):
 AMBIGUITY_FLOOR_DEG = 12.0
 PASS_HEAD = math.radians(6.0)   # 真の方位誤差[rad]。旋回の分解能(約4度)より少し緩く
 
+# **任務基準の合否（2026-09-23追加）。** 上の PASS_HEAD=6度 は旋回分解能が4度だった頃の値で、
+# 実機の旋回の行き過ぎ（min_wz で7度）に対して厳しすぎる。
+# 本当に効くのは「**ビードがアームの届く範囲に入るか**」なので、そちらで判定する。
+#
+#   ビード位置の誤差 ≒ 機体の位置誤差 + BEAD_LEVER × 方位誤差  ≤ BEAD_BUDGET
+#
+# 機体が方位を誤ると、ビードは機体から見て BEAD_LEVER の腕で振れる。
+BEAD_LEVER = 0.375    # 撮影位置でのビードまでの横距離[m]（アームの最良点）
+BEAD_BUDGET = 0.175   # そこでの余裕[m]（3軸・床+0.08m・胴体の占有を除外した値）
+
 SCENARIOS = [
     # (マーカーからの距離[m], 法線からのずれalpha[度], 初期の向きのずれ[度], 説明)
     (1.85, 0, 0, '正対から1.85m（2026-09-02の実機成功例と同条件）'),
@@ -223,9 +252,14 @@ SCENARIOS = [
 LOS_PASS_RANGE = 0.09
 
 
+def bead_error(r):
+    """機体の誤差を、ビード位置の誤差[m]に換算する。合否はこれで見る。"""
+    return r['pos_err'] + BEAD_LEVER * abs(r['head_err'])
+
+
 def passed(r, params, pass_pos):
     """任務としての合否。**モードで採点対象が変わる**（狙っていない量で落とさない）。"""
-    if r['outcome'] == '失敗' or abs(r['head_err']) > PASS_HEAD:
+    if r['outcome'] == '失敗' or bead_error(r) > BEAD_BUDGET:
         return False
     if params.use_normal:
         return r['pos_err'] <= pass_pos
@@ -300,11 +334,14 @@ def main():
           f'試行={a.seeds}回/シナリオ')
     if params.use_normal:
         pass_pos = params.standoff * math.sin(math.radians(AMBIGUITY_FLOOR_DEG)) + 0.06
-        print(f'合否は真値で判定: 位置 {pass_pos * 1000:.0f}mm 以内'
+        print(f'合否は真値で判定: **ビード位置の誤差** '
+              f'（機体の位置誤差 + {BEAD_LEVER:.3f}m × 方位誤差）が '
+              f'{BEAD_BUDGET * 1000:.0f}mm 以内。'
+              f'アームが吸収できる量で決めている。参考: 位置だけなら {pass_pos * 1000:.0f}mm'
               f'（法線が観測できない床 standoff x sin{AMBIGUITY_FLOOR_DEG:.0f}度'
               f'={params.standoff * math.sin(math.radians(AMBIGUITY_FLOOR_DEG)) * 1000:.0f}mm'
-              f' + 区間制御の分解能60mm）かつ '
-              f'方位 {math.degrees(PASS_HEAD):.0f}度 以内（見失い・時間切れは無条件で否）\n')
+              f' + 区間制御の分解能60mm）。'
+              f'見失い・時間切れは無条件で否\n')
     else:
         # 視線接近では**法線上の点を狙っていない**ので、そこからの距離で採点しない。
         # 任務は「マーカーの正面 standoff まで行って向く」なので、その2つで見る。
