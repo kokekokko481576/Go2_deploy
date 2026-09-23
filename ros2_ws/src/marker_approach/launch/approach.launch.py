@@ -59,7 +59,11 @@ def generate_launch_description():
     safety = Node(
         package='cmd_vel_safety', executable='cmd_vel_safety_node',
         name='cmd_vel_safety_node', output='screen',
-        parameters=[{'max_linear_x': 0.22, 'max_linear_y': 0.0,
-                     'max_angular_z': 0.45, 'max_linear_accel': 0.3,
-                     'max_angular_accel': 0.6, 'watchdog_timeout': 0.3}])
+        # **2026-09-23: 制御則が max_vx 0.40 / max_wz 1.00 になったので引き上げ。**
+        # 旧値(0.22 / 0.45)は制御則の下限(0.35 / 0.60)すら下回っており、
+        # このフィルタを通すと機体が踏み出せない指令しか届かない。
+        # 加速度も、0.40m/sへ立ち上がるのに0.3m/s^2では1.3秒かかるので緩めた。
+        parameters=[{'max_linear_x': 0.45, 'max_linear_y': 0.0,
+                     'max_angular_z': 1.10, 'max_linear_accel': 0.6,
+                     'max_angular_accel': 1.5, 'watchdog_timeout': 0.3}])
     return LaunchDescription(args + [approach, safety])
