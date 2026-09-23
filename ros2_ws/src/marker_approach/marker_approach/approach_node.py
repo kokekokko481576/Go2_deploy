@@ -29,7 +29,7 @@ import time
 
 import rclpy
 from diagnostic_msgs.msg import DiagnosticArray
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import PointStamped, PoseStamped, Twist
 from rclpy.node import Node
 from std_msgs.msg import Bool, String
 
@@ -71,6 +71,9 @@ class ApproachNode(Node):
     # (ROSパラメータ名, Params の属性名)。末尾が _deg のものは度で受けて rad に直す。
     CONTROL_PARAMS = [
         ('standoff', 'standoff'),
+        # ビードの置き場所（撮影位置に立ったときの機体から見た位置）。治具ごとに変わる
+        ('bead_forward', 'bead_forward'),
+        ('bead_right', 'bead_right'),
         ('pos_tolerance', 'pos_tolerance'),
         ('ang_tolerance_deg', 'ang_tolerance'),
         ('k_x', 'k_x'),
@@ -180,6 +183,11 @@ class ApproachNode(Node):
 
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel_raw', 10)
         self.state_pub = self.create_publisher(String, '~/state', 10)
+        # ビード位置（base_link座標）。**アームを向けるのはこの点。**
+        # マーカーを別置きスタンドにする設計では、撮影位置に立ったとき
+        # ビードは機体の右 bead_right・前 bead_forward に来る。到達誤差が
+        # そのまま入るので、下流は決め打ち角度ではなくこの点から関節角を出せる。
+        self.bead_pub = self.create_publisher(PointStamped, '~/bead_point', 10)
         # 到達したときだけ True を1回出す。**打ち切り・失敗・見失いでは出さない。**
         # #66 の goal_pose_bridge.py が NavigateToPose の STATUS_SUCCEEDED でだけ出すのと
         # 同じ契約にしてあり、下流のアーム側ノードはトリガ源(Nav2 / マーカー接近)を
@@ -359,6 +367,13 @@ class ApproachNode(Node):
 
         cmd = self.ctl.step(now, m[0], m[1], gamma, self.last_ambiguity, self.last_odom)
         self.publish(cmd.vx, cmd.wz)
+
+        if cmd.bead is not None:
+            pt = PointStamped()
+            pt.header.stamp = self.get_clock().now().to_msg()
+            pt.header.frame_id = 'base_link'
+            pt.point.x, pt.point.y = float(cmd.bead[0]), float(cmd.bead[1])
+            self.bead_pub.publish(pt)
 
         if cmd.state != self.last_state:
             self.last_state = cmd.state

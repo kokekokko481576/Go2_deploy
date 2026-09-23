@@ -151,6 +151,19 @@ class Params:
     # 視野の予算。**カメラ座標系での**マーカー方位で数える（base_linkではない。後述）
     fov_budget = math.radians(25.0)        # 旋回後にマーカーをこの方位内に残す
     drive_bearing_limit = math.radians(33.0)  # 直進中にこれを超えたら区間を切って向き直す
+    # ビードをどこに置くか。**撮影位置に立ったときの、機体から見たビードの位置**[m]。
+    # マーカーを別置きスタンドにする前提（2026-09-23の方針）。マーカーをワークに貼ると、
+    # カメラが要求する距離(base_linkから0.53m以上)とアームが要求する距離(0.375m)が
+    # 両立しない。スタンドをビードから「面に沿って standoff・面から bead_right」の位置へ
+    # 置けば、撮影位置に着いた時点でビードがアームの最良点に来る。
+    #
+    #   bead_right = 0.375 は3軸・ビード高さ床+0.08m・胴体の占有を除外した最良点で、
+    #   そこから全方向に±0.175m ずれても撮れる（tools/arm_reach_study.py）。
+    #   bead_forward = 0 は機体の真横。前後は -0.40〜+0.50m まで撮れるので制約は緩い。
+    #
+    # **真横旋回は要らない。** 撮影位置に着いた時点でワークに対して既に真横を向いている。
+    bead_forward = 0.0
+    bead_right = 0.375
     # base_link -> カメラ の取り付け（前方・左方[m]）。視野の判定に使う
     # **2026-09-23 実機実測。** この docstring が「判定はカメラ座標系で行う」と書き、
     # 327mm という値まで挙げているのに、**既定値が0.0のままで実際には base_link で
@@ -212,6 +225,23 @@ class Params:
         if self.final_heading not in ('marker', 'right', 'left'):
             bad.append(f"final_heading({self.final_heading!r}) が不正。"
                        "'marker' / 'right' / 'left' のいずれかにすること")
+        # マーカーを別置きスタンドにする前提の検査（2026-09-23）
+        if self.standoff - self.camera_x < 0.28:
+            bad.append(f'standoff({self.standoff}) - camera_x({self.camera_x}) = '
+                       f'{self.standoff - self.camera_x:.2f}m しかなく、到達時にカメラが'
+                       'マーカーへ近づきすぎる。実測の検出下限は0.28m'
+                       '（それ以下は再投影誤差が較正RMSの5倍を超える）')
+        if not 0.05 <= self.bead_right <= 0.55:
+            bad.append(f'bead_right({self.bead_right}) がアームの届く帯(0.05〜0.55m)の外。'
+                       'この位置のビードは3軸でも撮れない（tools/arm_reach_study.py）')
+        if abs(self.bead_forward) > 0.40:
+            bad.append(f'bead_forward({self.bead_forward}) がアームの届く範囲'
+                       '(-0.40〜+0.50m)の外')
+        if self.final_heading != 'marker':
+            bad.append(f"final_heading({self.final_heading!r}) が 'marker' でない。"
+                       'マーカーを別置きスタンドにする設計では、撮影位置に着いた時点で'
+                       '既にワークに対して真横を向いているので真横旋回は要らない。'
+                       '旋回するとビードがアームの届く帯から外れる')
         if self.pos_tolerance <= self.stop_lead_distance:
             bad.append(f'pos_tolerance({self.pos_tolerance}) が '
                        f'stop_lead_distance({self.stop_lead_distance}) 以下。'
@@ -223,10 +253,15 @@ class Command:
     """1周期の出力。"""
 
     def __init__(self, vx, wz, state, pos_err, bearing, bearing_cam, goal_bearing, dist,
-                 alpha, alpha_trusted, cycles, done=False, success=False, reason=None):
+                 alpha, alpha_trusted, cycles, done=False, success=False, reason=None,
+                 bead=None):
         self.vx, self.wz, self.state = vx, wz, state
         self.pos_err, self.bearing, self.goal_bearing, self.dist = pos_err, bearing, goal_bearing, dist
         self.bearing_cam = bearing_cam
+        # ビード位置 (x, y) を base_link 座標系で。**アームを向けるのはこの点。**
+        # 到達誤差がそのまま入っているので、下流は「決め打ち角度」ではなく
+        # この点を見て関節角を出せる（マーカーを見失っている周期は None）。
+        self.bead = bead
         self.alpha, self.alpha_trusted, self.cycles = alpha, alpha_trusted, cycles
         self.done, self.success, self.reason = done, success, reason
 
@@ -316,6 +351,23 @@ class TurnDriveTurn:
         gx = mx + math.cos(n_dir) * self.p.standoff
         gy = my + math.sin(n_dir) * self.p.standoff
         return bearing, gx, gy
+
+    def bead(self, mx, my):
+        """ビード位置を base_link 座標系で返す。**アームを向けるのはこの点。**
+
+        ゴール（撮影位置）に立ったとき機体がマーカーを向くので、そのときの機体の前方は
+        「ゴール→マーカー」の向きになる。ビードはその前方 bead_forward・右 bead_right。
+        いま機体がゴールに居なくても、**観測したマーカー姿勢から毎周期この点を出せる**ので、
+        到達誤差がそのままビード位置の誤差として下流（アーム）へ渡る。
+        """
+        bearing, gx, gy = self.goal(mx, my)
+        # ゴールに立ったときの機体の向き（ゴールからマーカーを見る向き）
+        th = math.atan2(my - gy, mx - gx)
+        c, sn = math.cos(th), math.sin(th)
+        # 右は -y 方向（REP-103）
+        bx = gx + c * self.p.bead_forward + sn * self.p.bead_right
+        by = gy + sn * self.p.bead_forward - c * self.p.bead_right
+        return bx, by
 
     # ---- 遷移 ----
 
@@ -581,4 +633,5 @@ class TurnDriveTurn:
 
         return Command(vx, wz, self.state, pos_err, bearing, bearing_cam, goal_bearing, dist,
                        self.alpha, self.alpha_trusted, self.cycles,
-                       self.done, self.success, self.reason)
+                       self.done, self.success, self.reason,
+                       bead=self.bead(mx, my))
