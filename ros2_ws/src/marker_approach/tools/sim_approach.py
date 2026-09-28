@@ -60,6 +60,19 @@ LOST_TIMEOUT = 0.5
 # 反対側へ折り返した解が通る。この確率で「曖昧性2〜5・法線が鏡映」の観測を返す。
 SPURIOUS_PROB = 0.3
 MAX_RUNTIME = 90.0
+# **停止後の揺れ（2026-09-28追加。仮説のモデルで、実機の分布は未計測）。**
+# 実機5本目（2026-09-24）は停止後約0.8秒の惰性中に観測し、alpha を6.6度過大に確定した。
+# 改訂前の sim は指令の遅れのあとピタリと止まるので、この失敗を再現できなかった。
+# 実際に動きが止まった時点から、減衰する揺れを観測に載せる:
+#   マーカー位置 ±SWAY_POS・法線 ±SWAY_GAMMA を振幅 exp(-t/tau)、周波数 SWAY_HZ で
+#   tau は停止ごとに SWAY_TAU の範囲で一様に引く（長い揺れも短い揺れもある）
+# 揺れている間（振幅 > SWAY_MOVING）は「歩行中」と同じく誤った解も混ざる。
+# **位置の振れと法線の誤差の比は仮定である。** 実機の trace_csv で確かめること。
+SWAY_POS = 0.015
+SWAY_GAMMA = math.radians(8.0)
+SWAY_HZ = 2.0
+SWAY_TAU = (0.25, 0.8)
+SWAY_MOVING = 0.2
 
 
 def ambiguity_of(tilt):
@@ -78,6 +91,9 @@ class Go2Sim:
         self.vx = self.wz = 0.0
         self.rng = random.Random(seed)
         self.path = 0.0
+        self.stopped_at = None       # 実際に動きが止まった時刻（揺れの起点）
+        self.sway_tau = 0.5
+        self.sway_phase = 0.0
 
     def command(self, now, vx, wz):
         self.queue.append((now + COMMAND_LATENCY, vx))
@@ -96,14 +112,28 @@ class Go2Sim:
         while self.wqueue and self.wqueue[0][0] <= now:
             _, wz = self.wqueue.pop(0)
             self.wz = self._respond(wz, TURN_DEADBAND, TURN_GAIN, TURN_OFFSET)
+        moving_now = abs(self.vx) > 0.0 or abs(self.wz) > 0.0
+        if moving_now:
+            self.stopped_at = None
+        elif self.stopped_at is None:
+            self.stopped_at = now
+            self.sway_tau = self.rng.uniform(*SWAY_TAU)
+            self.sway_phase = self.rng.uniform(0.0, 2 * math.pi)
         ds = self.vx * dt
         self.x += ds * math.cos(self.yaw)
         self.y += ds * math.sin(self.yaw)
         self.yaw = wrap(self.yaw + self.wz * dt + HEADING_DRIFT * ds)
         self.path += abs(ds)
 
+    def sway(self, now):
+        """停止後の揺れの振幅(0〜1)と位相。動いている間・揺れが無いときは 0。"""
+        if self.stopped_at is None or SWAY_POS == 0.0:
+            return 0.0, 0.0
+        ts = now - self.stopped_at
+        return math.exp(-ts / self.sway_tau), 2 * math.pi * SWAY_HZ * ts + self.sway_phase
 
-def observe(sim, marker, normal_dir, rng, moving=False):
+
+def observe(sim, marker, normal_dir, rng, moving=False, now=0.0):
     """カメラから見えるか判定し、見えていれば base_link 座標系の観測を返す。"""
     mx_w, my_w = marker
     cam = (sim.x + CAM_X * math.cos(sim.yaw), sim.y + CAM_X * math.sin(sim.yaw))
@@ -123,6 +153,12 @@ def observe(sim, marker, normal_dir, rng, moving=False):
     # 法線の方位（ロボット側を向く向き）。曖昧性が低いと大きく暴れる
     sigma = math.radians(8.0 / amb)
     gamma = wrap(normal_dir - sim.yaw + rng.gauss(0.0, sigma))
+    env, ph = sim.sway(now)
+    if env > 0.0:
+        mx += SWAY_POS * env * math.sin(ph)
+        my += SWAY_POS * env * math.cos(ph)
+        gamma = wrap(gamma + SWAY_GAMMA * env * math.sin(ph + 0.7))
+        moving = moving or env > SWAY_MOVING
     if moving and amb < 2.0 and rng.random() < SPURIOUS_PROB:
         # 誤った解: 法線を視線（ロボットへ向かう向き）について折り返す
         los_back = math.atan2(-my, -mx)
@@ -156,7 +192,7 @@ def run(dist, alpha_deg, yaw_off_deg, params, seed=0, trace=False):
         if t >= next_frame:
             next_frame += cam_dt
             moving = abs(sim.vx) > 0.02 or abs(sim.wz) > 0.05
-            o = observe(sim, marker, normal_dir, rng, moving)
+            o = observe(sim, marker, normal_dir, rng, moving, t)
             if o is not None:
                 obs, last_obs_t = o, t
 
@@ -178,7 +214,8 @@ def run(dist, alpha_deg, yaw_off_deg, params, seed=0, trace=False):
             odom_obs = (sim.x + rng.gauss(0.0, 0.003),
                         sim.y + rng.gauss(0.0, 0.003),
                         sim.yaw + rng.gauss(0.0, math.radians(0.5)))
-            cmd = ctl.step(t, obs[0], obs[1], None if stale else obs[2], obs[3], odom_obs)
+            cmd = ctl.step(t, obs[0], obs[1], None if stale else obs[2], obs[3], odom_obs,
+                           obs_time=last_obs_t)
             if (stale and not cmd.done and not ctl.marker_optional()
                     and not ctl.marker_loss_tolerable()):
                 outcome, detail = '失敗', f'見失ったまま {cmd.state} に移ろうとした（t={t:.1f}s）'
@@ -191,7 +228,8 @@ def run(dist, alpha_deg, yaw_off_deg, params, seed=0, trace=False):
                       f'カメラ方位{math.degrees(cmd.bearing_cam):+6.1f}度 '
                       f'ゴール方位{math.degrees(cmd.goal_bearing):+6.1f}度 '
                       f'alpha={math.degrees(cmd.alpha):+5.1f}'
-                      f'{"" if cmd.alpha_trusted else "?"} 曖昧性{obs[3]:.1f}')
+                      f'{"" if cmd.alpha_trusted else "?"} 曖昧性{obs[3]:.1f}'
+                      f'{" 静止" if ctl.stationary else ""}')
             if cmd.done:
                 outcome = '成功' if cmd.success else '打ち切り'
                 detail = cmd.reason
@@ -324,6 +362,8 @@ def main():
                     help='旋回の行き過ぎ補償[度]。既定は制御則側の値を使う')
     ap.add_argument('--spurious', type=float, default=None,
                     help='歩行中に誤った解を返す確率（既定 SPURIOUS_PROB。0で旧モデル）')
+    ap.add_argument('--no-sway', action='store_true',
+                    help='停止後の揺れを入れない（2026-09-28以前のモデル）')
     ap.add_argument('--only', type=int, default=None, help='シナリオ番号だけ実行')
     ap.add_argument('--sweep', action='store_true', help='距離とalphaの格子で届く範囲を出す')
     ap.add_argument('--final-heading', choices=['marker', 'right', 'left'], default='marker',
@@ -334,6 +374,8 @@ def main():
     a = ap.parse_args()
     if a.spurious is not None:
         globals()['SPURIOUS_PROB'] = a.spurious
+    if a.no_sway:
+        globals()['SWAY_POS'] = 0.0
 
     params = Params(standoff=a.standoff, camera_x=CAM_X, camera_y=0.0,
                     use_normal=not a.line_of_sight, final_heading=a.final_heading)

@@ -93,7 +93,10 @@ class ApproachNode(Node):
         ('min_progress', 'min_progress'),
         ('min_ambiguity', 'min_ambiguity'),
         ('normal_alpha', 'normal_alpha'),
-        ('alpha_settle_delay', 'alpha_settle_delay'),
+        # 静止の判定（マーカーの見え方で。2026-09-28。時間決め打ちの alpha_settle_delay は廃止）
+        ('still_window', 'still_window'),
+        ('still_tolerance', 'still_tolerance'),
+        ('still_max_extra', 'still_max_extra'),
         ('final_lost_timeout', 'final_lost_timeout'),
         # False にすると「マーカーの手前（視線上の standoff 点）」を狙う。
         # 届かない配置がなくなる代わりに、法線からのずれが残ったまま止まる
@@ -144,6 +147,9 @@ class ApproachNode(Node):
         # 真横旋回が逆方向に回る。歩容の旋回は速くても0.5rad/s程度なので、
         # 1周期(0.05s)で30度も変わるのは観測の異常とみなしてよい。
         self.declare_parameter('odom_jump_limit_deg', 30.0)
+        # 1周期=1行のCSV（空なら書かない）。**静止判定のしきい値を実機で決めるためのもの。**
+        # 静止待ち中のマーカー位置の振れと、その間に観測した法線(alpha)のずれを突き合わせる
+        self.declare_parameter('trace_csv', '')
 
         g = lambda n: self.get_parameter(n).value
         self.cam_xyz = (g('camera_x'), g('camera_y'), g('camera_z'))
@@ -153,6 +159,11 @@ class ApproachNode(Node):
         self.lost_timeout = g('lost_timeout')
         self.max_runtime = g('max_runtime')
         rate = g('rate')
+        self.trace = None
+        if g('trace_csv'):
+            self.trace = open(g('trace_csv'), 'w', buffering=1)
+            self.trace.write('t,obs_t,state,next_state,mx,my,mz,gamma_deg,alpha_obs_deg,ambiguity,'
+                             'stationary,alpha_deg,alpha_trusted,vx,wz\n')
 
         kw = {}
         for name, ctl_name in self.CONTROL_PARAMS:
@@ -376,7 +387,18 @@ class ApproachNode(Node):
             self.disable(f'最小距離 {self.min_distance}m まで接近（実測 {dist:.3f}m）', error=True)
             return
 
-        cmd = self.ctl.step(now, m[0], m[1], gamma, self.last_ambiguity, self.last_odom)
+        cmd = self.ctl.step(now, m[0], m[1], gamma, self.last_ambiguity, self.last_odom,
+                            obs_time=self.last_pose_time)
+        if self.trace is not None:
+            # 観測単体の alpha（平均する前）。静止判定の良し悪しはこれのばらつきで見る
+            a_obs = ('' if gamma is None else
+                     f'{math.degrees(math.remainder(gamma - math.atan2(m[1], m[0]) - math.pi, 2 * math.pi)):.2f}')
+            self.trace.write(
+                f'{now:.3f},{self.last_pose_time:.3f},{cmd.state},{self.ctl.next_state or ""},'
+                f'{m[0]:.4f},{m[1]:.4f},{m[2]:.4f},'
+                f'{"" if gamma is None else f"{math.degrees(gamma):.2f}"},{a_obs},'
+                f'{self.last_ambiguity:.2f},{int(self.ctl.stationary)},'
+                f'{math.degrees(cmd.alpha):.2f},{int(cmd.alpha_trusted)},{cmd.vx:.3f},{cmd.wz:.3f}\n')
         # 古い観測のまま直進やゴールへの旋回に移ったら、指令を出す前に止める
         if (stale and not cmd.done and not self.ctl.marker_optional()
                 and not self.ctl.marker_loss_tolerable()):
@@ -418,7 +440,7 @@ class ApproachNode(Node):
                 f'(カメラから{math.degrees(cmd.bearing_cam):+.1f}度) | '
                 f'法線ずれalpha={math.degrees(cmd.alpha):+.1f}度'
                 f'{self._alpha_note(cmd)} '
-                f'曖昧性{self.last_ambiguity:.2f} | '
+                f'曖昧性{self.last_ambiguity:.2f}{" 静止" if self.ctl.stationary else ""} | '
                 f'ゴール誤差{cmd.pos_err * 1000:.0f}mm 方位{math.degrees(cmd.goal_bearing):+.1f}度 | '
                 f'指令 vx={cmd.vx:+.3f} wz={cmd.wz:+.3f}'
                 f'{" [dry_run]" if self.dry_run else ""}')

@@ -180,9 +180,20 @@ class Params:
     # 静止待ちの前半は停止の惰性で機体がまだ動いているので、
     # 静止待ちに入ってからこの秒数が経つまでは使わない。sim（誤った解を30%混ぜる）で
     # 0.4 / 0.6 / 0.8秒と settle_time 0.7 / 1.0秒を振り、0.6秒・0.7秒が最良
-    # （50本中34本合格。静止ゲートなしは11本）。**実機の停止の惰性は約0.8秒あるので、
-    # 実機では観測窓(0.1秒)の間もまだ揺れている可能性がある。** ログの曖昧性で確かめること。
-    alpha_settle_delay = 0.6
+    # （50本中34本合格。静止ゲートなしは11本）。
+    #
+    # **「止まったか」は時間でなくマーカーの見え方で判定する（2026-09-28）。**
+    # 時間で決め打ちしていた頃（静止待ちに入って0.6秒後から観測）、実機の5本目で
+    # 停止後約0.8秒の惰性中に観測して alpha を6.6度過大に確定した。
+    # 静止待ちの間、直近 still_window 秒のマーカー位置（base_link）の振れ幅が
+    # still_tolerance 未満のときだけ静止とみなし、そのときだけ alpha を観測する。
+    # 窓は静止待ちに入るたびに空にする（動いていた頃の観測で静止を判定しない）。
+    # 静止待ちの時間(settle_time)が過ぎても静止を確認できなければ、最大 still_max_extra 秒
+    # 延ばす。それでも確認できなければ、その回は alpha を更新せずに次の区間へ進む。
+    still_window = 0.3
+    still_tolerance = 0.01
+    still_max_extra = 1.0
+    still_min_samples = 3        # 窓内にこの数の観測が無ければ判定しない（14fpsで約4枚）
     # **正対の前後はマーカーを見失っても即座に止めない（2026-09-24 実機で追加）。**
     # 弦に沿ってゴールへ入ると、着いた時点でマーカーがカメラ方位30度超の視野の端にあり、
     # 停止の惰性でさらに寄って視野から出る。正対旋回はまさにマーカーを視野の中央へ
@@ -258,6 +269,10 @@ class Params:
                        'マーカーを別置きスタンドにする設計では、撮影位置に着いた時点で'
                        '既にワークに対して真横を向いているので真横旋回は要らない。'
                        '旋回するとビードがアームの届く帯から外れる')
+        if self.still_window > self.settle_time + self.still_max_extra:
+            bad.append(f'still_window({self.still_window}) が静止待ちの最長'
+                       f'(settle_time+still_max_extra={self.settle_time + self.still_max_extra})'
+                       'より長く、静止を一度も確認できない')
         if self.pos_tolerance <= self.stop_lead_distance:
             bad.append(f'pos_tolerance({self.pos_tolerance}) が '
                        f'stop_lead_distance({self.stop_lead_distance}) 以下。'
@@ -307,6 +322,11 @@ class TurnDriveTurn:
         self.state = self.TURN_TO_GOAL
         self.next_state = None
         self.settle_until = 0.0
+        self.still_hist = []          # 静止待ち中の (観測時刻, mx, my)。静止の判定に使う
+        self.still_seen = False       # この静止待ちで静止を一度でも確認したか
+        self.last_obs_time = None     # 同じ観測を二重に数えないため
+        self.stationary = False       # 直近の step で静止とみなしたか（ログ用）
+        self.turn_toward_marker = False   # ゴールへの旋回がマーカーを視野へ戻す向きか
         self.cycles = 0
         self.drive_dir = 1
         self.cycle_start_err = None   # 周の開始時のゴール誤差。進んでいるかの判定に使う
@@ -336,9 +356,17 @@ class TurnDriveTurn:
         """マーカーを見失っても `final_lost_timeout` までは止めなくてよい区間か。
 
         静止待ち（機体に動く指令を出していない）と正対旋回（最後に見えた方位へ回す＝
-        マーカーを視野へ戻す向き）だけ。直進やゴールへの旋回は古い観測で動くと
-        どこへ行くか分からないので含めない。
+        マーカーを視野へ戻す向き）。直進は古い観測で動くとどこへ行くか分からないので含めない。
+
+        **ゴールへの旋回も、マーカーのいる側へ回しているときは含める（2026-09-28）。**
+        視野の端（カメラ方位33度超）で直進を切ると、停止の惰性で視野から出ることがある。
+        続くゴールへの旋回は目標がカメラ方位±25度に切り詰められているので、この場合は
+        必ずマーカーを視野へ戻す向きになる（正対旋回と同じ状況）。含めていなかったため、
+        戻す向きに回り始める前に「見失った」で落ちていた（sim の無作為400本中17本）。
+        ゴール側（マーカーを視野の外へ押す向き）へ回すときは含めない。
         """
+        if self.state == self.TURN_TO_GOAL:
+            return self.turn_toward_marker
         return self.state in (self.SETTLE, self.FINAL_TURN)
 
     def start(self, now):
@@ -409,7 +437,34 @@ class TurnDriveTurn:
         self.state = self.SETTLE
         self.next_state = next_state
         self.settle_until = now + self.p.settle_time
+        self.still_hist = []
+        self.still_seen = False
         self.events.append((now, next_state, reason))
+
+    def _observe_still(self, now, mx, my, fresh, obs_time):
+        """静止待ち中の観測を窓に積み、いま静止しているかを返す。
+
+        静止 = 直近 still_window 秒のマーカー位置の振れ幅（x・yそれぞれの最大-最小）が
+        still_tolerance 未満。窓が still_window の8割以上を覆い、still_min_samples 枚以上
+        あるときだけ判定する（観測が途切れた窓で「止まっている」と言わない）。
+        """
+        p = self.p
+        if self.state != self.SETTLE:
+            return False
+        if fresh and (obs_time is None or obs_time != self.last_obs_time):
+            self.still_hist.append((now if obs_time is None else obs_time, mx, my))
+            self.last_obs_time = obs_time
+        self.still_hist = [h for h in self.still_hist if h[0] >= now - p.still_window]
+        h = self.still_hist
+        if len(h) < p.still_min_samples or h[-1][0] - h[0][0] < 0.8 * p.still_window:
+            return False
+        xs = [e[1] for e in h]
+        ys = [e[2] for e in h]
+        still = (max(xs) - min(xs) < p.still_tolerance
+                 and max(ys) - min(ys) < p.still_tolerance)
+        if still:
+            self.still_seen = True
+        return still
 
     def _abort(self, now, reason, bearing):
         """打ち切りを決める。**ただし、その前に必ずマーカーへ向き直す。**
@@ -453,8 +508,13 @@ class TurnDriveTurn:
         """カメラ座標系でのマーカー方位。**視野の判定はこれで行う**（base_linkではない）。"""
         return math.atan2(my - self.p.camera_y, mx - self.p.camera_x)
 
-    def step(self, now, mx, my, gamma_obs, ambiguity, odom_obs=None):
+    def step(self, now, mx, my, gamma_obs, ambiguity, odom_obs=None, obs_time=None):
         """1周期進める。
+
+        `obs_time` はマーカー観測の時刻。**呼び出し側が同じ観測を周期ごとに渡し直す場合は
+        必ず渡すこと**（制御周期20Hzに対しカメラは約14fps）。渡し直した古い値を
+        新しい観測として積むと、位置が変わらないので「静止している」と誤判定する。
+        `gamma_obs` が None の周期（見失い中）は観測として積まない。
 
         `odom_obs` は機体の推測航法上の姿勢 `(x, y, yaw)`。**真横へ旋回するときだけ使う**
         （その区間はマーカーが視野から出るのでカメラで閉じられない）。
@@ -470,8 +530,8 @@ class TurnDriveTurn:
         """
         p = self.p
         bearing, _, _ = self.goal(mx, my)
-        stationary = (self.state == self.SETTLE
-                      and now >= self.settle_until - p.settle_time + p.alpha_settle_delay)
+        stationary = self._observe_still(now, mx, my, gamma_obs is not None, obs_time)
+        self.stationary = stationary
         was_trusted = self.alpha_trusted
         self.update_alpha(gamma_obs, bearing, ambiguity, stationary)
         if self.alpha_trusted and not was_trusted:
@@ -495,6 +555,18 @@ class TurnDriveTurn:
             if self.state == self.SETTLE:
                 if now < self.settle_until:
                     break
+                # 静止を確認できるまで延ばす。**マーカーが見えているときだけ**。
+                # 停止の惰性で視野から出ると確認のしようがなく、待つほど見失いの
+                # 猶予を食うだけになる（sim の斜め20度で、延ばした末に見失ったまま
+                # 次の区間へ移ろうとして落ちた）。真横旋回の前後も視野外なので延ばさない
+                if not self.still_seen and self.next_state != self.SIDE_TURN:
+                    if self.still_hist and now < self.settle_until + p.still_max_extra:
+                        break
+                    self.events.append((now, self.next_state,
+                                        '静止を確認できないまま進む（'
+                                        + (f'+{p.still_max_extra:.1f}秒延ばした' if self.still_hist
+                                           else 'マーカーが見えていない')
+                                        + '。この静止待ちでは alpha を更新していない）'))
                 self.state, self.next_state = self.next_state, None
                 continue
 
@@ -563,6 +635,7 @@ class TurnDriveTurn:
                                  f'（カメラ方位 {math.degrees(bearing_cam):+.1f}度）。直進に移る')
                     continue
                 wz = math.copysign(clamp(p.k_yaw * abs(target), p.min_wz, p.max_wz), target)
+                self.turn_toward_marker = target * bearing_cam > 0
                 break
 
             if self.state == self.DRIVE:
