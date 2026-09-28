@@ -93,6 +93,8 @@ class ApproachNode(Node):
         ('min_progress', 'min_progress'),
         ('min_ambiguity', 'min_ambiguity'),
         ('normal_alpha', 'normal_alpha'),
+        ('alpha_settle_delay', 'alpha_settle_delay'),
+        ('final_lost_timeout', 'final_lost_timeout'),
         # False にすると「マーカーの手前（視線上の standoff 点）」を狙う。
         # 届かない配置がなくなる代わりに、法線からのずれが残ったまま止まる
         ('use_normal', 'use_normal'),
@@ -353,12 +355,21 @@ class ApproachNode(Node):
             return
         # **真横へ旋回する区間はマーカーが視野から出るのが正常**なので見失いで止めない。
         # 判定は制御則側の marker_optional() に一本化してある（前後の静止待ちも含む）。
-        if not self.ctl.marker_optional():
-            if self.last_pose_time is None or now - self.last_pose_time > self.lost_timeout:
+        # 静止待ちと正対旋回だけは final_lost_timeout まで粘る（最後に見えた方位へ回して
+        # 見つけ直す）。その間は古い観測で制御則を回すので、法線(gamma)は渡さない。
+        stale = self.last_pose_time is None or now - self.last_pose_time > self.lost_timeout
+        if stale and not self.ctl.marker_optional():
+            if self.last_pose_time is None or not self.ctl.marker_loss_tolerable():
                 self.disable(f'マーカーを {self.lost_timeout}s 見失った', error=True)
+                return
+            if now - self.last_pose_time > self.ctl.p.final_lost_timeout:
+                self.disable(f'マーカーを {self.ctl.p.final_lost_timeout}s 見失った'
+                             '（正対旋回で見つけ直せなかった）', error=True)
                 return
 
         m, gamma = self.marker_in_base()
+        if stale:
+            gamma = None
         dist = math.hypot(m[0], m[1])
         # 見えていない区間では観測が古い。古い値で「近づきすぎ」を判定しない
         if not self.ctl.marker_optional() and dist < self.min_distance:
@@ -366,6 +377,11 @@ class ApproachNode(Node):
             return
 
         cmd = self.ctl.step(now, m[0], m[1], gamma, self.last_ambiguity, self.last_odom)
+        # 古い観測のまま直進やゴールへの旋回に移ったら、指令を出す前に止める
+        if (stale and not cmd.done and not self.ctl.marker_optional()
+                and not self.ctl.marker_loss_tolerable()):
+            self.disable(f'マーカーを見失ったまま {cmd.state} に移ろうとした', error=True)
+            return
         self.publish(cmd.vx, cmd.wz)
 
         if cmd.bead is not None:

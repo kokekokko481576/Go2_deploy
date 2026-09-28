@@ -173,6 +173,22 @@ class Params:
     # 法線推定
     min_ambiguity = 2.0
     normal_alpha = 0.3
+    # **法線は静止しているときだけ観測する（2026-09-24 実機で追加）。**
+    # 正面付近では姿勢推定の2解が区別できず、止まっていれば曖昧性は1.4〜1.5としきい値を
+    # 割って正しく捨てられる。ところが**歩行中の揺れで曖昧性が2〜5へ跳ね、誤った解を
+    # 信用して alpha を 0 → 14度まで積み上げた**（正対から1.85mで開始した1本目）。
+    # 静止待ちの前半は停止の惰性で機体がまだ動いているので、
+    # 静止待ちに入ってからこの秒数が経つまでは使わない。sim（誤った解を30%混ぜる）で
+    # 0.4 / 0.6 / 0.8秒と settle_time 0.7 / 1.0秒を振り、0.6秒・0.7秒が最良
+    # （50本中34本合格。静止ゲートなしは11本）。**実機の停止の惰性は約0.8秒あるので、
+    # 実機では観測窓(0.1秒)の間もまだ揺れている可能性がある。** ログの曖昧性で確かめること。
+    alpha_settle_delay = 0.6
+    # **正対の前後はマーカーを見失っても即座に止めない（2026-09-24 実機で追加）。**
+    # 弦に沿ってゴールへ入ると、着いた時点でマーカーがカメラ方位30度超の視野の端にあり、
+    # 停止の惰性でさらに寄って視野から出る。正対旋回はまさにマーカーを視野の中央へ
+    # 戻す動作なので、最後に見えた方位へ回し続ければ見つけ直せる。
+    # この秒数までは見失いを許す（静止待ちと正対旋回の間だけ。直進・ゴールへの旋回では許さない）。
+    final_lost_timeout = 2.0
     # ゴールをどこに置くか。True: マーカー**法線上**の standoff 点（正対して止まる）。
     # False: **視線上**の standoff 点＝「マーカーの手前」。後者は横へ寄る必要が
     # ないので届かない配置がなくなるが、**法線からのずれ alpha はそのまま残る**
@@ -316,19 +332,32 @@ class TurnDriveTurn:
         return (self.state == self.SIDE_TURN
                 or (self.state == self.SETTLE and self.next_state == self.SIDE_TURN))
 
+    def marker_loss_tolerable(self):
+        """マーカーを見失っても `final_lost_timeout` までは止めなくてよい区間か。
+
+        静止待ち（機体に動く指令を出していない）と正対旋回（最後に見えた方位へ回す＝
+        マーカーを視野へ戻す向き）だけ。直進やゴールへの旋回は古い観測で動くと
+        どこへ行くか分からないので含めない。
+        """
+        return self.state in (self.SETTLE, self.FINAL_TURN)
+
     def start(self, now):
         self._reset_state()
         self.events = [(now, self.state, '開始')]
+        # **最初に静止して法線を測ってから計画する。** alpha は静止中しか観測しないので、
+        # いきなり計画すると視線基準で直進を決め、直後に法線が確定してゴールが
+        # 跳び、「1周で縮まらない」で打ち切っていた（2026-09-24、sim の近め1.0m・斜め15度）
+        self._settle(now, self.TURN_TO_GOAL, '開始時に静止して法線を測る')
 
     # ---- 法線（alpha）の推定 ----
 
-    def update_alpha(self, gamma_obs, bearing, ambiguity):
-        """曖昧性が十分なときだけ alpha を更新する（指数移動平均）。
+    def update_alpha(self, gamma_obs, bearing, ambiguity, stationary=True):
+        """静止中で、曖昧性が十分なときだけ alpha を更新する（指数移動平均）。
 
         alpha = (法線の向き) - (マーカーからロボットへ向かう視線の向き)。
         その場旋回では bearing と法線が同じだけ回るので alpha は不変。
         """
-        if gamma_obs is None or ambiguity < self.p.min_ambiguity:
+        if gamma_obs is None or ambiguity < self.p.min_ambiguity or not stationary:
             return
         a_obs = wrap(gamma_obs - (bearing + math.pi))
         if not self.alpha_trusted:
@@ -339,14 +368,15 @@ class TurnDriveTurn:
 
     # ---- 幾何 ----
 
-    def goal(self, mx, my):
+    def goal(self, mx, my, use_normal=None):
         """マーカー方位と、ゴール点（法線上のstandoff点）を base_link 座標系で返す。
 
         法線は毎周期、その時点の視線方向から alpha を使って**再構成する**。
         保持したベクトルを回転させると、更新が止まっている間に劣化する。
         """
         bearing = math.atan2(my, mx)
-        use_alpha = self.alpha_trusted and self.p.use_normal
+        use_normal = self.p.use_normal if use_normal is None else use_normal
+        use_alpha = self.alpha_trusted and use_normal
         n_dir = bearing + math.pi + (self.alpha if use_alpha else 0.0)
         gx = mx + math.cos(n_dir) * self.p.standoff
         gy = my + math.sin(n_dir) * self.p.standoff
@@ -360,7 +390,11 @@ class TurnDriveTurn:
         いま機体がゴールに居なくても、**観測したマーカー姿勢から毎周期この点を出せる**ので、
         到達誤差がそのままビード位置の誤差として下流（アーム）へ渡る。
         """
-        bearing, gx, gy = self.goal(mx, my)
+        # **視線接近でも法線上の撮影位置を基準にする（2026-09-24 実機で発覚）。**
+        # ビードはスタンドの法線を基準に置いてあるので、機体がどこを狙って寄ったかとは
+        # 関係ない。視線接近のゴールで計算していたため、法線から20度ずれて止まった本で
+        # 右0.388mと出したが、巻尺で測った実際の位置は右約0.575m（届く上限0.55mの外）だった。
+        bearing, gx, gy = self.goal(mx, my, use_normal=True)
         # ゴールに立ったときの機体の向き（ゴールからマーカーを見る向き）
         th = math.atan2(my - gy, mx - gx)
         c, sn = math.cos(th), math.sin(th)
@@ -436,7 +470,14 @@ class TurnDriveTurn:
         """
         p = self.p
         bearing, _, _ = self.goal(mx, my)
-        self.update_alpha(gamma_obs, bearing, ambiguity)
+        stationary = (self.state == self.SETTLE
+                      and now >= self.settle_until - p.settle_time + p.alpha_settle_delay)
+        was_trusted = self.alpha_trusted
+        self.update_alpha(gamma_obs, bearing, ambiguity, stationary)
+        if self.alpha_trusted and not was_trusted:
+            # ゴールの基準が視線から法線へ切り替わった。切り替わる前の誤差を
+            # 1周の起点にすると「縮まらない」と誤判定して打ち切る
+            self.cycle_start_err = None
         bearing, gx, gy = self.goal(mx, my)          # alpha更新後の値で決める
         pos_err = math.hypot(gx, gy)
         goal_bearing = math.atan2(gy, gx)

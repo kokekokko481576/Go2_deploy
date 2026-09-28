@@ -55,6 +55,10 @@ TURN_LATENCY = 0.77          # 旋回[s]
 HEADING_DRIFT = 0.025    # 直進1mあたりの向きのずれ[rad]（実測: 3.5mで横0.15m）
 CAM_FPS = 14.4
 LOST_TIMEOUT = 0.5
+# **歩行中は姿勢推定の誤った解を信用してしまう（2026-09-24 実機）。** 正面付近では止まって
+# いれば曖昧性が1.4〜1.5で正しく捨てられるが、揺れていると2〜5へ跳ね、法線が視線の
+# 反対側へ折り返した解が通る。この確率で「曖昧性2〜5・法線が鏡映」の観測を返す。
+SPURIOUS_PROB = 0.3
 MAX_RUNTIME = 90.0
 
 
@@ -99,7 +103,7 @@ class Go2Sim:
         self.path += abs(ds)
 
 
-def observe(sim, marker, normal_dir, rng):
+def observe(sim, marker, normal_dir, rng, moving=False):
     """カメラから見えるか判定し、見えていれば base_link 座標系の観測を返す。"""
     mx_w, my_w = marker
     cam = (sim.x + CAM_X * math.cos(sim.yaw), sim.y + CAM_X * math.sin(sim.yaw))
@@ -119,6 +123,11 @@ def observe(sim, marker, normal_dir, rng):
     # 法線の方位（ロボット側を向く向き）。曖昧性が低いと大きく暴れる
     sigma = math.radians(8.0 / amb)
     gamma = wrap(normal_dir - sim.yaw + rng.gauss(0.0, sigma))
+    if moving and amb < 2.0 and rng.random() < SPURIOUS_PROB:
+        # 誤った解: 法線を視線（ロボットへ向かう向き）について折り返す
+        los_back = math.atan2(-my, -mx)
+        gamma = wrap(2 * los_back - gamma)
+        amb = rng.uniform(2.0, 5.0)
     return mx, my, gamma, amb
 
 
@@ -146,7 +155,8 @@ def run(dist, alpha_deg, yaw_off_deg, params, seed=0, trace=False):
     while t < MAX_RUNTIME:
         if t >= next_frame:
             next_frame += cam_dt
-            o = observe(sim, marker, normal_dir, rng)
+            moving = abs(sim.vx) > 0.02 or abs(sim.wz) > 0.05
+            o = observe(sim, marker, normal_dir, rng, moving)
             if o is not None:
                 obs, last_obs_t = o, t
 
@@ -155,16 +165,24 @@ def run(dist, alpha_deg, yaw_off_deg, params, seed=0, trace=False):
             # **真横へ旋回する区間だけは見失いで落とさない。**
             # 90度回せばマーカーは必ず視野(±46度)の外に出る。この区間はヨー角で
             # 開ループに回しているので、見えなくても進行できる（実機ノード側も同じ扱いが要る）。
-            if not ctl.marker_optional() and (last_obs_t is None or t - last_obs_t > LOST_TIMEOUT):
-                outcome, detail = '失敗', f'マーカーを{LOST_TIMEOUT}s見失った（t={t:.1f}s）'
-                break
+            # 静止待ちと正対旋回だけは final_lost_timeout まで粘る（実機ノードと同じ扱い）
+            stale = last_obs_t is None or t - last_obs_t > LOST_TIMEOUT
+            if stale and not ctl.marker_optional():
+                if (last_obs_t is None or not ctl.marker_loss_tolerable()
+                        or t - last_obs_t > params.final_lost_timeout):
+                    outcome, detail = '失敗', f'マーカーを見失った（t={t:.1f}s、{ctl.state}）'
+                    break
             # ヨー角の観測。実機ならオドメトリ/IMU。開始からの差分しか使わないので
             # 絶対の基準はどうでもよいが、ノイズは載せておく
             # 推測航法の観測 (x, y, yaw)。**位置も要る**（その場旋回でも機体は動く）
             odom_obs = (sim.x + rng.gauss(0.0, 0.003),
                         sim.y + rng.gauss(0.0, 0.003),
                         sim.yaw + rng.gauss(0.0, math.radians(0.5)))
-            cmd = ctl.step(t, obs[0], obs[1], obs[2], obs[3], odom_obs)
+            cmd = ctl.step(t, obs[0], obs[1], None if stale else obs[2], obs[3], odom_obs)
+            if (stale and not cmd.done and not ctl.marker_optional()
+                    and not ctl.marker_loss_tolerable()):
+                outcome, detail = '失敗', f'見失ったまま {cmd.state} に移ろうとした（t={t:.1f}s）'
+                break
             vx, wz = cmd.vx, cmd.wz
             last_self_err = cmd.pos_err
             if trace:
@@ -304,6 +322,8 @@ def main():
     ap.add_argument('--standoff', type=float, default=0.65)
     ap.add_argument('--turn-lead-deg', type=float, default=None,
                     help='旋回の行き過ぎ補償[度]。既定は制御則側の値を使う')
+    ap.add_argument('--spurious', type=float, default=None,
+                    help='歩行中に誤った解を返す確率（既定 SPURIOUS_PROB。0で旧モデル）')
     ap.add_argument('--only', type=int, default=None, help='シナリオ番号だけ実行')
     ap.add_argument('--sweep', action='store_true', help='距離とalphaの格子で届く範囲を出す')
     ap.add_argument('--final-heading', choices=['marker', 'right', 'left'], default='marker',
@@ -312,6 +332,8 @@ def main():
                     help='ゴールを法線上ではなく**視線上**に置く（＝マーカーの手前まで行く）。'
                          '合否も「マーカーからの距離が standoff か」で判定する')
     a = ap.parse_args()
+    if a.spurious is not None:
+        globals()['SPURIOUS_PROB'] = a.spurious
 
     params = Params(standoff=a.standoff, camera_x=CAM_X, camera_y=0.0,
                     use_normal=not a.line_of_sight, final_heading=a.final_heading)
