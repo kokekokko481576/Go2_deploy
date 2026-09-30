@@ -268,8 +268,10 @@ class Runner:
                 continue
             self.check_temp(f'アーム {i}/{len(seq) - 1} の前')
             self.confirm(f'アームを {i}/{len(seq) - 1} 段目へ: {p}')
-            self.arm_to(p, f'{i}/{len(seq) - 1}')
+            # 動かし始める前に進めておく。途中で Abort しても、収納は
+            # 干渉確認済みの seq[i-1] から始まる（seq[i-1] を飛ばさない）。
             self.cur_index = i
+            self.arm_to(p, f'{i}/{len(seq) - 1}')
 
     def snap(self, name):
         """1枚撮る。背中の Jetson で撮るので、**Jetson が再起動中だと黙って失敗する**
