@@ -57,7 +57,7 @@ RD "export PYTHONPATH=/ros2_ws/src/marker_approach:\$PYTHONPATH && \
     python3 -m marker_approach.approach_node --ros-args \
     -r cmd_vel_raw:=/robot1/cmd_vel \
     -p camera_x:=0.33 -p camera_y:=0.0 -p camera_z:=0.0057 \
-    -p standoff:=0.65 -p dry_run:=false -p pos_tolerance:=0.09 \
+    -p standoff:=0.65 -p dry_run:=false \
     -p fov_budget_deg:=$FOV_BUDGET -p drive_bearing_limit_deg:=$DRIVE_LIMIT \
     -p max_runtime:=120.0 > /tmp/approach.log 2>&1"
 sleep 5
