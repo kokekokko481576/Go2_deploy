@@ -614,4 +614,4 @@ class TurnDriveTurn:
         return Command(vx, wz, self.state, pos_err, bearing, bearing_cam, goal_bearing, dist,
                        self.alpha, self.alpha_trusted, self.cycles,
                        self.done, self.success, self.reason,
-                       bead=self.bead(mx, my))
+                       bead=None if gamma_obs is None else self.bead(mx, my))
