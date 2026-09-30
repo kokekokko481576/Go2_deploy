@@ -267,7 +267,7 @@ class ApproachNode(Node):
             return
 
         now = self._now()
-        if self.started_at and now - self.started_at > self.max_runtime:
+        if self.started_at is not None and now - self.started_at > self.max_runtime:
             self.disable(f'最大実行時間 {self.max_runtime}s を超過', error=True)
             return
         # 静止待ちと正対旋回だけは final_lost_timeout まで粘る（最後に見えた方位へ回して
