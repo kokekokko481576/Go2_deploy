@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>marker_approach</name>
+  <version>0.1.0</version>
+  <description>マーカーの相対姿勢を見ながら、正対して所定の距離まで近づく接近制御</description>
+  <maintainer email="riku062214riku@gmail.com">riku</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2_ros</depend>
+  <!-- 真横へ旋回するときのヨー角の入手先（yaw_source パラメータで選ぶ） -->
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
