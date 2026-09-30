@@ -21,15 +21,16 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
     args = [
         DeclareLaunchArgument('dry_run', default_value='true',
-                              help='trueなら速度指令を出さず計算結果をログに出すだけ'),
+                              description='trueなら速度指令を出さず計算結果をログに出すだけ'),
         DeclareLaunchArgument('standoff', default_value='0.65',
-                              help='マーカーからどれだけ手前に立つか[m]。'
-                                   '150mmタグでは0.58mを切れない（視野からはみ出す）'),
+                              description='マーカーからどれだけ手前に立つか[m]。'
+                                          '150mmタグでは0.58mを切れない（視野からはみ出す）'),
         # ゴールをどこに置くか。true: マーカー法線上（面に正対して止まる）。
         # false: 視線上＝マーカーの手前。横へ寄らないので届かない配置が無くなる代わりに、
         # 法線からのずれが残ったまま斜めに止まる。
@@ -40,9 +41,9 @@ def generate_launch_description():
     approach = Node(
         package='marker_approach', executable='approach_node',
         name='marker_approach_node', output='screen',
-        parameters=[{'dry_run': LaunchConfiguration('dry_run'),
-                     'standoff': LaunchConfiguration('standoff'),
-                     'use_normal': LaunchConfiguration('use_normal')}],
+        parameters=[{'dry_run': ParameterValue(LaunchConfiguration('dry_run'), value_type=bool),
+                     'standoff': ParameterValue(LaunchConfiguration('standoff'), value_type=float),
+                     'use_normal': ParameterValue(LaunchConfiguration('use_normal'), value_type=bool)}],
         remappings=[('marker_pose', LaunchConfiguration('marker_pose_topic')),
                     ('marker_diagnostics', LaunchConfiguration('marker_diag_topic'))])
     # 横速度の上限は0。turn-drive-turn は横移動を使わない（混ざると前進が止まる）
