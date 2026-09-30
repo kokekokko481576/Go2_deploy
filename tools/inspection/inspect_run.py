@@ -275,6 +275,8 @@ class Runner:
         """1枚撮る。背中の Jetson で撮るので、**Jetson が再起動中だと黙って失敗する**
         （2026-09-28 15:28、アームを出した状態で Jetson が再起動し、写真が残らなかった）。保存を確かめる。"""
         png = RS_OUT / f'{name}_color.png'
+        auto_tries = 0
+        max_auto_retries = 2
         while not self.a.dry_run:
             env = dict(os.environ, RS_OUT=str(RS_OUT))
             if self.a.depth:
@@ -284,6 +286,12 @@ class Runner:
                 break
             self.say(f'  [失敗] 撮影できなかった（終了コード {r.returncode}）。'
                      'Jetson(192.168.123.18) に ssh できるか確認')
+            if self.a.auto:
+                auto_tries += 1
+                if auto_tries > max_auto_retries:
+                    raise Abort(f'{name}: 撮影が失敗し、自動の撮り直し{max_auto_retries}回でも直らない')
+                self.say(f'  [自動] 撮り直します（{auto_tries}/{max_auto_retries}）')
+                continue
             try:
                 ans = input('    r で撮り直す / それ以外で撮らずに進む: ')
             except EOFError:
