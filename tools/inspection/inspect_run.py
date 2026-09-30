@@ -41,6 +41,8 @@ HERE = Path(__file__).resolve().parent
 D1 = Path.home() / 'd1_sdk' / 'run.sh'
 RS_SNAP = HERE / 'rs_snap.sh'
 LOG_DIR = HERE.parent / 'logs'
+# rs_snap.sh / rs_snap_fake.sh と共有する撮影の保存先（両方とも RS_OUT を見る）。
+RS_OUT = Path(os.environ.get('RS_OUT', str(Path.home() / 'marker_detection' / 'logs' / 'rs')))
 NAMES = ['FR_hip', 'FR_thigh', 'FR_calf', 'FL_hip', 'FL_thigh', 'FL_calf',
          'RR_hip', 'RR_thigh', 'RR_calf', 'RL_hip', 'RL_thigh', 'RL_calf']
 HIPS = [6, 9]
@@ -272,10 +274,12 @@ class Runner:
     def snap(self, name):
         """1枚撮る。背中の Jetson で撮るので、**Jetson が再起動中だと黙って失敗する**
         （2026-09-28 15:28、アームを出した状態で Jetson が再起動し、写真が残らなかった）。保存を確かめる。"""
+        png = RS_OUT / f'{name}_color.png'
         while not self.a.dry_run:
-            env = dict(os.environ, RS_DEPTH=self.a.depth) if self.a.depth else None
+            env = dict(os.environ, RS_OUT=str(RS_OUT))
+            if self.a.depth:
+                env['RS_DEPTH'] = self.a.depth
             r = subprocess.run(['timeout', '60', str(RS_SNAP), name], env=env)
-            png = LOG_DIR / 'rs' / f'{name}_color.png'
             if r.returncode == 0 and png.exists():
                 break
             self.say(f'  [失敗] 撮影できなかった（終了コード {r.returncode}）。'
@@ -286,7 +290,7 @@ class Runner:
                 ans = ''
             if ans.strip().lower() != 'r':
                 break
-        self.say(f'  撮影: logs/rs/{name}_color.png')
+        self.say(f'  撮影: {png}')
 
     def stow(self, seq):
         if self.cur_index is None or self.cur_index == 0:

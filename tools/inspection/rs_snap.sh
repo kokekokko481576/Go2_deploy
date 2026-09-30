@@ -13,7 +13,7 @@ if [ "${1:-}" = "--depth" ]; then
   depth=$2; shift 2
 fi
 name=${1:-snap_$(date +%m%d_%H%M%S)}
-out=~/marker_detection/logs/rs
+out=${RS_OUT:-~/marker_detection/logs/rs}
 mkdir -p "$out"
 dargs=""
 if [ -n "$depth" ]; then
