@@ -198,26 +198,16 @@ def run(dist, alpha_deg, yaw_off_deg, params, seed=0, trace=False):
 
         if t >= next_control:
             next_control += control_dt
-            # **真横へ旋回する区間だけは見失いで落とさない。**
-            # 90度回せばマーカーは必ず視野(±46度)の外に出る。この区間はヨー角で
-            # 開ループに回しているので、見えなくても進行できる（実機ノード側も同じ扱いが要る）。
             # 静止待ちと正対旋回だけは final_lost_timeout まで粘る（実機ノードと同じ扱い）
             stale = last_obs_t is None or t - last_obs_t > LOST_TIMEOUT
-            if stale and not ctl.marker_optional():
+            if stale:
                 if (last_obs_t is None or not ctl.marker_loss_tolerable()
                         or t - last_obs_t > params.final_lost_timeout):
                     outcome, detail = '失敗', f'マーカーを見失った（t={t:.1f}s、{ctl.state}）'
                     break
-            # ヨー角の観測。実機ならオドメトリ/IMU。開始からの差分しか使わないので
-            # 絶対の基準はどうでもよいが、ノイズは載せておく
-            # 推測航法の観測 (x, y, yaw)。**位置も要る**（その場旋回でも機体は動く）
-            odom_obs = (sim.x + rng.gauss(0.0, 0.003),
-                        sim.y + rng.gauss(0.0, 0.003),
-                        sim.yaw + rng.gauss(0.0, math.radians(0.5)))
-            cmd = ctl.step(t, obs[0], obs[1], None if stale else obs[2], obs[3], odom_obs,
+            cmd = ctl.step(t, obs[0], obs[1], None if stale else obs[2], obs[3],
                            obs_time=last_obs_t)
-            if (stale and not cmd.done and not ctl.marker_optional()
-                    and not ctl.marker_loss_tolerable()):
+            if stale and not cmd.done and not ctl.marker_loss_tolerable():
                 outcome, detail = '失敗', f'見失ったまま {cmd.state} に移ろうとした（t={t:.1f}s）'
                 break
             vx, wz = cmd.vx, cmd.wz
@@ -245,26 +235,13 @@ def run(dist, alpha_deg, yaw_off_deg, params, seed=0, trace=False):
     gx_true = marker[0] + math.cos(normal_dir) * params.standoff
     gy_true = marker[1] + math.sin(normal_dir) * params.standoff
     pos_err = math.hypot(sim.x - gx_true, sim.y - gy_true)
-    # 最終姿勢の誤差。**final_heading によって「正しい向き」が変わる**。
-    # marker=マーカーを正面(0度)、right=マーカーが右真横(-90度)、left=左真横(+90度)。
-    #
-    # ただし**真横へ回るのは到達に成功したときだけ**である（打ち切ったときは
-    # マーカーを正面に残す。見失った状態で終わらせないための設計）。
-    # したがって採点も「その回が実際に狙った姿勢」に対して行う。狙っていない姿勢からの
-    # 90度ずれを誤差として数えると、打ち切りが全部不合格に見えてしまい判断を誤る。
-    side_done = params.final_heading != 'marker' and ctl.arrival is not None and ctl.success
-    desired = 0.0
-    if side_done:
-        desired = (-params.side_turn_angle if params.final_heading == 'right'
-                   else +params.side_turn_angle)
-    bearing_true = wrap(math.atan2(marker[1] - sim.y, marker[0] - sim.x) - sim.yaw)
-    head_err = wrap(bearing_true - desired)
+    # 最終姿勢の誤差。マーカーを正面(0度)に見て止まることを狙う。
+    head_err = wrap(math.atan2(marker[1] - sim.y, marker[0] - sim.x) - sim.yaw)
     # 法線からの残ずれ（真値）。「正対」の精度はこれで見る。alpha が観測できない配置では
     # 制御則は自分の誤差をゼロと信じたまま、これが残る
     alpha_final = wrap(math.atan2(sim.y - marker[1], sim.x - marker[0]) - normal_dir)
     segments = sum(1 for e in ctl.events if e[1] in (ctl.TURN_TO_GOAL, ctl.DRIVE, ctl.FINAL_TURN))
     return dict(outcome=outcome, detail=detail, t=t, pos_err=pos_err, head_err=head_err,
-                side_done=side_done,
                 alpha_final=alpha_final, self_err=last_self_err,
                 dist_to_marker=math.hypot(sim.x, sim.y), segments=segments,
                 path=sim.path, cycles=ctl.cycles, events=ctl.events)
@@ -366,8 +343,6 @@ def main():
                     help='停止後の揺れを入れない（2026-09-28以前のモデル）')
     ap.add_argument('--only', type=int, default=None, help='シナリオ番号だけ実行')
     ap.add_argument('--sweep', action='store_true', help='距離とalphaの格子で届く範囲を出す')
-    ap.add_argument('--final-heading', choices=['marker', 'right', 'left'], default='marker',
-                    help='到達後の向き。right=マーカーを右真横に見る姿勢まで旋回する')
     ap.add_argument('--line-of-sight', action='store_true',
                     help='ゴールを法線上ではなく**視線上**に置く（＝マーカーの手前まで行く）。'
                          '合否も「マーカーからの距離が standoff か」で判定する')
@@ -378,7 +353,7 @@ def main():
         globals()['SWAY_POS'] = 0.0
 
     params = Params(standoff=a.standoff, camera_x=CAM_X, camera_y=0.0,
-                    use_normal=not a.line_of_sight, final_heading=a.final_heading)
+                    use_normal=not a.line_of_sight)
     if a.turn_lead_deg is not None:
         params.turn_lead_angle = math.radians(a.turn_lead_deg)
     bad = params.validate()
@@ -388,10 +363,6 @@ def main():
             print(' -', b)
         return 1
 
-    if params.final_heading != 'marker':
-        print(f'[最終姿勢] マーカーが{"右" if params.final_heading == "right" else "左"}真横'
-              f'（{math.degrees(params.side_turn_angle):.0f}度）に来るまで、到達後に'
-              'その場旋回する。**この区間はマーカーが視野外なのでヨー角で開ループ**')
     print(f'standoff={params.standoff}m  到達判定={params.pos_tolerance * 1000:.0f}mm / '
           f'{math.degrees(params.ang_tolerance):.1f}度  '
           f'turn_lead={math.degrees(params.turn_lead_angle):.1f}度  '
@@ -420,7 +391,7 @@ def main():
         return 0
     header = (f'{"#":>2} {"シナリオ":<30} {"判定":<4} {"結果":<6} {"時間":>6} '
               f'{"真の誤差" if params.use_normal else "距離のずれ":>9} '
-              f'{"自己申告":>9} {"残alpha":>8} {"方位":>7} {"姿"}{"区間":>4} {"周":>3}')
+              f'{"自己申告":>9} {"残alpha":>8} {"方位":>7} {"区間":>4} {"周":>3}')
     print(header)
     print('-' * len(header))
     all_ok = True
@@ -440,7 +411,6 @@ def main():
                   f'{shown * 1000:7.0f}mm {r["self_err"] * 1000:7.0f}mm '
                   f'{math.degrees(r["alpha_final"]):+6.1f}度 '
                   f'{math.degrees(r["head_err"]):+5.1f}度 '
-                  f'{"横" if r["side_done"] else "正"}'
                   f'{r["segments"]:>4} {r["cycles"] + 1:>3}'
                   + ('' if ok else f'\n     -> {r["detail"]}'))
             results.append((i, note, ok, r))

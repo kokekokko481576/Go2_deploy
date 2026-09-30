@@ -34,12 +34,6 @@ def generate_launch_description():
         # false: 視線上＝マーカーの手前。横へ寄らないので届かない配置が無くなる代わりに、
         # 法線からのずれが残ったまま斜めに止まる。
         DeclareLaunchArgument('use_normal', default_value='true'),
-        # 到達後の最終姿勢。right/left でマーカーを真横に入れる旋回を足す（アーム作業用）。
-        # **その旋回はマーカーが視野から出るのでヨー角が要る**（yaw_source）。
-        DeclareLaunchArgument('final_heading', default_value='marker'),
-        DeclareLaunchArgument('side_turn_angle_deg', default_value='90.0'),
-        DeclareLaunchArgument('yaw_source', default_value='none'),
-        DeclareLaunchArgument('yaw_topic', default_value='/odom'),
         DeclareLaunchArgument('marker_pose_topic', default_value='/marker_pose'),
         DeclareLaunchArgument('marker_diag_topic', default_value='/marker_diagnostics'),
     ]
@@ -48,11 +42,7 @@ def generate_launch_description():
         name='marker_approach_node', output='screen',
         parameters=[{'dry_run': LaunchConfiguration('dry_run'),
                      'standoff': LaunchConfiguration('standoff'),
-                     'use_normal': LaunchConfiguration('use_normal'),
-                     'final_heading': LaunchConfiguration('final_heading'),
-                     'side_turn_angle_deg': LaunchConfiguration('side_turn_angle_deg'),
-                     'yaw_source': LaunchConfiguration('yaw_source'),
-                     'yaw_topic': LaunchConfiguration('yaw_topic')}],
+                     'use_normal': LaunchConfiguration('use_normal')}],
         remappings=[('marker_pose', LaunchConfiguration('marker_pose_topic')),
                     ('marker_diagnostics', LaunchConfiguration('marker_diag_topic'))])
     # 横速度の上限は0。turn-drive-turn は横移動を使わない（混ざると前進が止まる）
