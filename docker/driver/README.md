@@ -31,15 +31,15 @@ dev⇔sim(Jazzy)間で出ていたCycloneDDSのXTypes警告は出ない想定)�
 ```bash
 # 1. driverコンテナ: 実機/ループバックに接続し、まず起立させる(工場出荷のStandUp)
 cd docker/driver && docker compose up -d
-docker compose exec driver ros2 run unitree_ros2_example go2_sport_client 4   # StandUp
+docker compose exec driver bash -c 'source /setup_dds.sh; ros2 run unitree_ros2_example go2_sport_client 4'   # StandUp
 
 # 2. driverコンテナ: cmd_vel→Move変換ブリッジを起動
-docker compose exec driver ros2 run go2_sport_bridge cmd_vel_to_sport_node
+docker compose exec driver bash -c 'source /setup_dds.sh; ros2 run go2_sport_bridge cmd_vel_to_sport_node'
 
 # 3. devコンテナ: 安全フィルタとテレオペを起動
 cd ../.. && cd docker && docker compose up -d
-docker compose exec ros2 ros2 run cmd_vel_safety cmd_vel_safety_node
-docker compose exec ros2 ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=cmd_vel_raw
+docker compose exec ros2 bash -c 'source /opt/ros/humble/setup.bash; source ~/ros2_ws/install/setup.bash; ros2 run cmd_vel_safety cmd_vel_safety_node'
+docker compose exec ros2 bash -c 'source /opt/ros/humble/setup.bash; source ~/ros2_ws/install/setup.bash; ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=cmd_vel_raw'
 ```
 
 `go2_sport_bridge`は`cmd_vel`を20Hz(既定)で`/api/sport/request`のMoveへ変換して配信し続け、
@@ -55,10 +55,10 @@ StandUp前にMoveを送っても効果が無い/意図しない挙動の可能�
 
 ```bash
 # 1軸だけ短時間動かして符号・速さを確かめる(初回は必ずこれから)
-docker compose exec driver ros2 run go2_sport_bridge jog.sh vx 0.40 1.0
+docker compose exec driver bash -c 'source /setup_dds.sh; ros2 run go2_sport_bridge jog.sh vx 0.40 1.0'
 
 # 非常停止。別ターミナルで常に打てる状態にしてから走らせること
-docker compose exec driver ros2 run go2_sport_bridge estop.sh
+docker compose exec driver bash -c 'source /setup_dds.sh; ros2 run go2_sport_bridge estop.sh'
 ```
 
 `jog.sh`は、dev側の`cmd_vel_safety`が動いていれば`/cmd_vel_raw`に送って安全フィルタを経由させ、

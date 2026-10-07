@@ -133,13 +133,13 @@ Move命令を受け付けても歩かない。DDS上は指令が正常に流れ�
 
 ```bash
 # driverコンテナ: 起立
-docker compose exec driver ros2 run unitree_ros2_example go2_sport_client 4   # StandUp
+docker compose exec driver bash -c 'source /setup_dds.sh; ros2 run unitree_ros2_example go2_sport_client 4'   # StandUp
 
 # driverコンテナ: cmd_vel→Moveブリッジ
-docker compose exec driver ros2 run go2_sport_bridge cmd_vel_to_sport_node
+docker compose exec driver bash -c 'source /setup_dds.sh; ros2 run go2_sport_bridge cmd_vel_to_sport_node'
 
 # driverコンテナ: **非常停止用**。別ターミナルで打てる状態にしてから先に進む
-docker compose exec driver ros2 run go2_sport_bridge estop.sh
+docker compose exec driver bash -c 'source /setup_dds.sh; ros2 run go2_sport_bridge estop.sh'
 ```
 
 まず**テレオペではなく`jog.sh`で1軸ずつ**確認する。テレオペはキー1つで複数軸が同時に動き、
@@ -147,8 +147,8 @@ docker compose exec driver ros2 run go2_sport_bridge estop.sh
 
 ```bash
 # driverコンテナ: 1軸ずつ(前進 / 左 / 左旋回)。正の向きは REP-103
-docker compose exec driver ros2 run go2_sport_bridge jog.sh vx 0.40 1.0
-docker compose exec driver ros2 run go2_sport_bridge jog.sh wz 0.60 1.0
+docker compose exec driver bash -c 'source /setup_dds.sh; ros2 run go2_sport_bridge jog.sh vx 0.40 1.0'
+docker compose exec driver bash -c 'source /setup_dds.sh; ros2 run go2_sport_bridge jog.sh wz 0.60 1.0'
 ```
 
 - [ ] `jog.sh vx 0.40 1.0` で前進する(**0.20以下では足が出ない、実用下限は0.35**。下記「安全上の注意」参照)
@@ -160,12 +160,14 @@ docker compose exec driver ros2 run go2_sport_bridge jog.sh wz 0.60 1.0
 
 ```bash
 # devコンテナ: 安全フィルタ
-docker compose exec ros2 ros2 run cmd_vel_safety cmd_vel_safety_node \
-  --ros-args -p max_linear_x:=0.45 -p max_linear_y:=0.18 -p max_angular_z:=1.10
+docker compose exec ros2 bash -c 'source /opt/ros/humble/setup.bash; source ~/ros2_ws/install/setup.bash; \
+  ros2 run cmd_vel_safety cmd_vel_safety_node \
+  --ros-args -p max_linear_x:=0.45 -p max_linear_y:=0.18 -p max_angular_z:=1.10'
 
 # devコンテナ: テレオペ(別ターミナル)
-docker compose exec ros2 ros2 run teleop_twist_keyboard teleop_twist_keyboard \
-  --ros-args -r cmd_vel:=cmd_vel_raw
+docker compose exec ros2 bash -c 'source /opt/ros/humble/setup.bash; source ~/ros2_ws/install/setup.bash; \
+  ros2 run teleop_twist_keyboard teleop_twist_keyboard \
+  --ros-args -r cmd_vel:=cmd_vel_raw'
 ```
 
 - [ ] キー入力でGo2が実際に前進・旋回することを確認

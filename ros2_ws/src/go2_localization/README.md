@@ -693,7 +693,7 @@ sim版との対応:
 
 ```bash
 # driverコンテナ: 実機/utlidar/cloud・sportmodestateを購読できる状態にしてから
-docker compose exec driver ros2 run go2_sport_bridge state_to_odom_imu_node
+docker compose exec driver bash -c 'source /setup_dds.sh; ros2 run go2_sport_bridge state_to_odom_imu_node'
 
 # devコンテナ: 地図作成
 cd ~/ros2_ws && colcon build --symlink-install --packages-select go2_localization

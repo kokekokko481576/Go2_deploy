@@ -3,7 +3,7 @@
 # 向き・符号・速さが指令どおりかを目視で確かめる。
 #
 # 使い方:
-#   docker compose exec driver ros2 run go2_sport_bridge jog.sh vx 0.40 1.0
+#   docker compose exec driver bash -c 'source /setup_dds.sh; ros2 run go2_sport_bridge jog.sh vx 0.40 1.0'
 #
 #   jog.sh vx 0.40 1.0      # 前進 0.40m/s を1秒
 #   jog.sh vy 0.10 1.0      # 左へ 0.10m/s を1秒（正=左。REP-103）

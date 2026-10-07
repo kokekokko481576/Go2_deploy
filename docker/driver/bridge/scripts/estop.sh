@@ -2,7 +2,7 @@
 # Go2 非常停止。ブリッジを落としてから停止指令を直接送る。
 #
 # 使い方: driverコンテナで、別ターミナルに常に打てる状態で待機させておく
-#   docker compose exec driver ros2 run go2_sport_bridge estop.sh
+#   docker compose exec driver bash -c 'source /setup_dds.sh; ros2 run go2_sport_bridge estop.sh'
 #
 # 順序が重要: 先に指令元を止めないと、止めた直後に次の指令で再び動き出す。
 #
