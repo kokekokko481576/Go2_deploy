@@ -255,8 +255,8 @@ class C(Node):
         self.done = True
         r = [x for x in m.ranges if not math.isinf(x) and not math.isnan(x)]
         if not r:
-            print('NG 有効ビームが0本。点群が届いていない')
-            sys.exit(1)
+            print('NG 有効ビームが0本')
+            sys.exit(2)
         near = sum(1 for x in r if x < 1.0)
         pct = 100.0 * near / len(r)
         r.sort()
@@ -273,13 +273,29 @@ true"
     local out rc
     out=$(docker exec "$DEV" bash -c "$DEV_SH; timeout 25 python3 /tmp/floor_check.py" 2>/dev/null)
     rc=$?
-    log "  $out"
-    if [ "$rc" -ne 0 ]; then
-        echo "[real_up]   1m未満のビームが多すぎる。床を障害物として拾っている疑い。" >&2
-        echo "[real_up]   FLOOR_Z(現在 $FLOOR_Z)を機体の実際の立ち高さに合わせること。" >&2
-        echo "[real_up]   目安: ros2 topic echo --once /go2_state_bridge/odom の position.z の符号反転" >&2
-        return 1
-    fi
+    [ -n "$out" ] && log "  $out"
+    # 終了コードで原因を分ける。床除去の問題(1)と、チェーンが繋がっていない問題(2/124)を
+    # 混ぜると、後者でも FLOOR_Z をいじる方向へ誘導してしまう
+    case "$rc" in
+        0) ;;
+        1)
+            echo "[real_up]   1m未満のビームが多すぎる。床を障害物として拾っている疑い。" >&2
+            echo "[real_up]   FLOOR_Z(現在 $FLOOR_Z)を機体の実際の立ち高さに合わせること。" >&2
+            echo "[real_up]   目安: ros2 topic echo --once /go2_state_bridge/odom の position.z の符号反転" >&2
+            return 1 ;;
+        2)
+            echo "[real_up]   スキャンは届いたが有効ビームが0本。点群が空か、高さの切り出し範囲に何も入っていない。" >&2
+            echo "[real_up]   docker exec $DEV cat /tmp/hsv.log と、/utlidar/cloud_base_restamped が流れているかを見ること" >&2
+            return 1 ;;
+        124)
+            echo "[real_up]   /go2_localization/chin_lidar_scan が25秒間1通も届かない。床除去の問題ではない。" >&2
+            echo "[real_up]   height_slice_viz(/tmp/hsv.log)・pointcloud_to_laserscan(/tmp/p2l.log)が落ちていないか、" >&2
+            echo "[real_up]   driver側の /utlidar/cloud_base_restamped が出ているか(/tmp/restamp_base.log)を見ること" >&2
+            return 1 ;;
+        *)
+            echo "[real_up]   床除去の自己検定そのものが失敗した(終了コード $rc)。docker exec $DEV python3 /tmp/floor_check.py を手で実行して確認すること" >&2
+            return 1 ;;
+    esac
 }
 
 start_slam() {
