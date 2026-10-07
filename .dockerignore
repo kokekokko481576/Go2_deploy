@@ -1,16 +1,18 @@
-# **これは driver 専用の除外リストではない。ルートを context にする全イメージに効く。**
-# driverイメージのビルドコンテキストはリポジトリルート(docker/driver/compose.yaml の
-# `context: ../..`)。driverが使わない巨大なディレクトリを送らないようにする。
+# リポジトリルートを context にするイメージ(driver・sim)の共通の除外リスト。
 #
-# **sim も同じくルートが context** (docker/sim/compose.yaml の `context: ../..`)。
-# sim は `external/go2_ros2_sim_py` を COPY するので、ここでの除外をそのまま受けると
-# ビルドが "not found" で失敗する。そのため sim 側には専用の除外リスト
-# `docker/sim/Dockerfile.dockerignore` を置いてあり、simのビルドはそちらを使う。
-# **ここに除外を足すときは docker/sim/Dockerfile.dockerignore も確認すること。**
+# **BuildKit が有効なら、このファイルは使われない。** driver と sim はそれぞれ
+# `docker/driver/Dockerfile.dockerignore` / `docker/sim/Dockerfile.dockerignore` を持っており、
+# BuildKit は `<Dockerfileのパス>.dockerignore` があればそちらを優先する。
+# このファイルが効くのは classic builder(`DOCKER_BUILDKIT=0`、docker-compose v1)のときだけ。
+#
+# そのため**どのイメージでも使うものは除外しない**(除外すると classic builder でだけ
+# "not found" でビルドが壊れ、エラーが .dockerignore を示唆しないので原因が追えない)。
+# 特に `external/go2_ros2_sim_py`(約365MB)は sim が COPY するので除外しない。
+# classic builder では driver のビルドでもそれを送るので遅くなるが、壊れはしない。
+#
 # (dev だけが context=docker/ で、このファイルの影響を受けない)
 .git
 chapter1
-external/go2_ros2_sim_py
 ros2_ws/build
 ros2_ws/install
 ros2_ws/log
