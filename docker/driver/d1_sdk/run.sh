@@ -45,4 +45,6 @@ if [ ! -x "$BIN" ]; then
     exit 1
 fi
 
-exec env LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}" "$BIN" "$@"
+# LD_LIBRARY_PATH が未設定のとき "/usr/local/lib:" にすると、末尾の空要素が
+# カレントディレクトリとして探索される。空のときはコロンを付けない
+exec env LD_LIBRARY_PATH="/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$BIN" "$@"
