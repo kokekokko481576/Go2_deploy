@@ -54,21 +54,31 @@ unitree_sdk2(`/usr/local/lib` の純正 CycloneDDS)を両方リンクすると�
 - **`dry_run` は既定で true**。JSONをログに出すだけで送らない。実機へ出すときだけ
   明示的に false にする
 - 可動域を超える角度はクランプする(J1/J4/J6 ±135度、J2/J3/J5 ±90度。公称スペック)
-- `min_command_interval` で送信間隔の下限を設ける。D1 は連続コマンドで数分後に
+- `min_command_interval`(既定25秒)で送信間隔の下限を設ける。D1 は連続コマンドで数分後に
   無応答化するという報告があり(`docs/計画/アーム動作.md` §4-3)、低頻度の離散コマンドを
-  基本方針にしている
+  基本方針にしている。**下限に満たない指令は捨てずに待ち行列に積み、順番どおりに送る**
+  (`pacer.py`。捨てると上流のウェイポイントが黙って抜ける)
+- `zero_pose` は下限を無視してすぐ送り、待ち行列は捨てる(復帰したい瞬間に待たせない)
+- **グリッパー(angle6)は既定で固定値 13.2度を送る。** 実機ではグリッパーでカメラを挟んでおり、
+  変えるとカメラが落ちる。指令に追従させるのは `gripper_follow_command:=true` のときだけ
 """
 
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float64MultiArray
 
 from unitree_arm.msg import ArmString
 
 from .conversion import (
-    FUNCODE_MULTI_JOINT, FUNCODE_ZERO, N_INPUT,
+    DEFAULT_GRIPPER_FIXED_DEG, FUNCODE_MULTI_JOINT, FUNCODE_ZERO, N_INPUT,
     build_payload, multi_joint_data, to_servo_degrees,
 )
+from .pacer import CommandPacer
+
+# 機体が購読しているトピック。DDS 上では rt/arm_Command になる。名前に選択の余地は無い
+ARM_COMMAND_TOPIC = '/arm_Command'
 
 class ArmBridgeNode(Node):
 
@@ -78,15 +88,21 @@ class ArmBridgeNode(Node):
         self.declare_parameter('dry_run', True)
         self.declare_parameter('mode', 1)
         self.declare_parameter('address', 1)
-        self.declare_parameter('min_command_interval', 1.0)
+        self.declare_parameter('min_command_interval', 25.0)
+        self.declare_parameter('max_pending', 10)
         # 実機の関節回転方向は未照合。ベンダーURDFで2軸が実機と食い違っていたという
         # 他ラボの報告があるので（`docs/計画/アーム動作.md` §4-5）、符号とオフセットを
         # パラメータで直せるようにしておく。**実機で目視照合してから埋めること。**
-        self.declare_parameter('joint_signs', [1.0] * 6)
-        self.declare_parameter('joint_offsets_deg', [0.0] * 6)
-        # グリッパーは sim が prismatic 2軸[m]、D1 は angle6 の1値。
-        # 開き量[m] を 0..1 に正規化して、開閉の角度範囲へ線形に割り当てる。
-        # **この対応は推測。** 実機で開閉させて実測してから直すこと。
+        # `-1` のように整数で書いても通るよう、型を固定しない(後で float にする)
+        any_type = ParameterDescriptor(dynamic_typing=True)
+        self.declare_parameter('joint_signs', [1.0] * 6, any_type)
+        self.declare_parameter('joint_offsets_deg', [0.0] * 6, any_type)
+        # グリッパーは既定で固定値を送る(conversion.DEFAULT_GRIPPER_FIXED_DEG 参照。
+        # 実機ではカメラを挟んでいて、変えると落ちる)。
+        # 指令に追従させる場合は sim の prismatic 2軸[m] の開き量を 0..1 に正規化して、
+        # 開閉の角度範囲へ線形に割り当てる。**この対応は推測。** 実機で開閉させて実測してから使うこと。
+        self.declare_parameter('gripper_follow_command', False)
+        self.declare_parameter('gripper_fixed_deg', DEFAULT_GRIPPER_FIXED_DEG)
         self.declare_parameter('gripper_open_m', 0.033)
         self.declare_parameter('gripper_closed_deg', 0.0)
         self.declare_parameter('gripper_open_deg', 0.0)
@@ -95,29 +111,41 @@ class ArmBridgeNode(Node):
         self.mode = int(self.get_parameter('mode').value)
         self.address = int(self.get_parameter('address').value)
         self.min_interval = float(self.get_parameter('min_command_interval').value)
+        self.max_pending = int(self.get_parameter('max_pending').value)
         self.signs = [float(x) for x in self.get_parameter('joint_signs').value]
         self.offsets = [float(x) for x in self.get_parameter('joint_offsets_deg').value]
         self.gripper_open_m = float(self.get_parameter('gripper_open_m').value)
         self.gripper_closed_deg = float(self.get_parameter('gripper_closed_deg').value)
         self.gripper_open_deg = float(self.get_parameter('gripper_open_deg').value)
+        self.gripper_follow = bool(self.get_parameter('gripper_follow_command').value)
+        self.gripper_fixed_deg = float(self.get_parameter('gripper_fixed_deg').value)
 
         if len(self.signs) != 6 or len(self.offsets) != 6:
             raise SystemExit('joint_signs と joint_offsets_deg は6要素で渡してください')
+        if self.gripper_follow and self.gripper_open_deg == self.gripper_closed_deg:
+            # 開閉の角度が同じだと、入力によらず常に同じ角度へ能動的に駆動する
+            raise SystemExit('gripper_follow_command:=true には gripper_open_deg と '
+                             'gripper_closed_deg に異なる値(実測値)を渡してください')
 
         # **seq は毎回変える。** Go2 本体では `header.identity.id` を固定したまま
         # 同じ内容を送り続けると機体が重複とみなして無視する、という実機実測がある
         # (marker_detection の知見。前進効率 40%→83%)。D1 で同じ挙動をするかは未確認だが、
         # 固定にする理由が無いので増やしておく。
         self.seq = 0
-        self.last_sent = None
+        self.pacer = CommandPacer(self.min_interval, self.max_pending)
 
-        self.cmd_pub = self.create_publisher(ArmString, 'arm_command_out', 10)
+        # 既定のトピック名を機体の購読と同じにしておく。別名を既定にすると remap を
+        # 忘れたときに「送信:」がログに出るのに機体には何も届かない
+        self.cmd_pub = self.create_publisher(ArmString, ARM_COMMAND_TOPIC, 10)
         self.create_subscription(Float64MultiArray, 'arm_command', self.on_arm_command, 10)
         self.create_subscription(Bool, 'zero_pose', self.on_zero_pose, 10)
+        self.create_timer(0.2, self._drain)
 
         self.get_logger().info(
             f'D1アームブリッジ 準備完了 mode={self.mode} address={self.address} '
-            f'送信間隔の下限{self.min_interval}s '
+            f'出力={self.cmd_pub.topic_name} 送信間隔の下限{self.min_interval}s '
+            + (f'グリッパー=指令に追従({self.gripper_closed_deg}〜{self.gripper_open_deg}度) '
+               if self.gripper_follow else f'グリッパー=固定{self.gripper_fixed_deg}度 ')
             + ('**dry_run: JSONをログに出すだけで実機へ送りません**'
                if self.dry_run else '*** 実機へ送ります ***'))
         if not self.dry_run:
@@ -132,35 +160,45 @@ class ArmBridgeNode(Node):
             self.get_logger().error(
                 f'arm_command の要素数が {len(msg.data)} です（{N_INPUT} を期待）。捨てます')
             return
-        if not self._interval_ok():
-            return
 
         angles, warnings = to_servo_degrees(
             list(msg.data), self.signs, self.offsets,
-            self.gripper_open_m, self.gripper_closed_deg, self.gripper_open_deg)
+            self.gripper_open_m, self.gripper_closed_deg, self.gripper_open_deg,
+            None if self.gripper_follow else self.gripper_fixed_deg)
         for w in warnings:
             self.get_logger().warn(w)
-        self._send(FUNCODE_MULTI_JOINT, multi_joint_data(self.mode, angles))
+        if not self.pacer.push(angles):
+            self.get_logger().error(
+                f'送信待ちが {self.max_pending} 件たまっています。この指令は捨てます'
+                '（上流の送信間隔が min_command_interval より短すぎます）')
+            return
+        wait = self.pacer.wait_time(self._now())
+        if wait > 0.0:
+            self.get_logger().info(
+                f'送信間隔の下限まで {wait:.1f}s 待ってから送ります（待ち {len(self.pacer.pending)} 件）')
+        self._drain()
 
     def on_zero_pose(self, msg):
-        """ゼロ姿勢へ戻す（funcode 7）。安全な初期化・復帰用。"""
+        """ゼロ姿勢へ戻す（funcode 7）。安全な初期化・復帰用。
+
+        送信間隔の下限を無視してすぐ送る。戻したい瞬間に最大で下限ぶん待たせないため。
+        """
         if not msg.data:
             return
-        if not self._interval_ok():
-            return
+        dropped = self.pacer.bypass(self._now())
+        if dropped:
+            self.get_logger().warn(f'送信待ちの指令 {dropped} 件を捨てて、ゼロ姿勢へ戻します')
         self._send(FUNCODE_ZERO, None)
 
     # ------------------------------------------------------------------ 送信
 
-    def _interval_ok(self):
-        now = self.get_clock().now().nanoseconds * 1e-9
-        if self.last_sent is not None and now - self.last_sent < self.min_interval:
-            self.get_logger().warn(
-                f'前回の送信から {now - self.last_sent:.2f}s しか経っていません'
-                f'（下限 {self.min_interval}s）。この指令は捨てます')
-            return False
-        self.last_sent = now
-        return True
+    def _now(self):
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def _drain(self):
+        angles = self.pacer.pop_ready(self._now())
+        if angles is not None:
+            self._send(FUNCODE_MULTI_JOINT, multi_joint_data(self.mode, angles))
 
     def _send(self, funcode, data):
         self.seq += 1
@@ -178,11 +216,13 @@ def main():
     node = ArmBridgeNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        # SIGTERM では rclpy が先にコンテキストを畳むので、二重に shutdown しない
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

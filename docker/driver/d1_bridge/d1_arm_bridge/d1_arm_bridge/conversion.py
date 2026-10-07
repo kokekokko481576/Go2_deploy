@@ -22,13 +22,23 @@ FUNCODE_MULTI_JOINT = 2
 FUNCODE_ENABLE = 5
 FUNCODE_ZERO = 7
 
+# グリッパー(angle6)の既定の固定値[度]。**実機ではグリッパーでカメラ(D435i)の支柱を
+# 挟んでおり、この値から変えるとカメラが落ちる**(2026-09-28 実機。#78 の inspect_poses.json と同じ値)。
+DEFAULT_GRIPPER_FIXED_DEG = 13.2
+
 
 def to_servo_degrees(values, signs, offsets,
-                     gripper_open_m=0.033, gripper_closed_deg=0.0, gripper_open_deg=0.0):
+                     gripper_open_m=0.033, gripper_closed_deg=0.0, gripper_open_deg=0.0,
+                     gripper_fixed_deg=DEFAULT_GRIPPER_FIXED_DEG):
     """`arm_command`(rad + m) を D1 の angle0..angle6(度) へ変換する。
 
     戻り値は `(角度7個, 警告の文字列リスト)`。可動域を超えた分はクランプし、
     何をクランプしたかを警告として返す（ログに出すのは呼び出し側の仕事）。
+
+    `gripper_fixed_deg` が None でなければ、グリッパーの入力を無視して angle6 をその値に
+    固定する(既定)。funcode 2 は angle0..angle6 を必ず含むので「送らない」ことはできず、
+    何かは送ることになる。対応が未確定のまま入力から計算すると、その値へ能動的に駆動してしまう。
+    None のときだけ、開き量[m]を開閉の角度範囲へ線形に割り当てる(**この対応は推測**)。
     """
     out, warnings = [], []
     for i in range(6):
@@ -39,6 +49,10 @@ def to_servo_degrees(values, signs, offsets,
                 f'J{i + 1} の指令 {deg:+.1f}度 が可動域 ±{lim:.0f}度 を超えています。クランプします')
             deg = math.copysign(lim, deg)
         out.append(deg)
+
+    if gripper_fixed_deg is not None:
+        out.append(gripper_fixed_deg)
+        return out, warnings
 
     # グリッパー: simの2軸(左右)のうち開き量の大きい方を採り、0..1 に正規化する
     opening = max(values[6], values[7])

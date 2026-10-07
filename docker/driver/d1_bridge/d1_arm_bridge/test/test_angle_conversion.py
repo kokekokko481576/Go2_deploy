@@ -16,7 +16,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from d1_arm_bridge.conversion import (  # noqa: E402
-    FUNCODE_MULTI_JOINT, FUNCODE_ZERO, JOINT_LIMIT_DEG,
+    DEFAULT_GRIPPER_FIXED_DEG, FUNCODE_MULTI_JOINT, FUNCODE_ZERO, JOINT_LIMIT_DEG,
     build_payload, multi_joint_data, to_servo_degrees,
 )
 
@@ -83,23 +83,37 @@ def test_符号とオフセットが効く():
     assert angles[0] == pytest.approx(-30.0 + 5.0)
 
 
+def test_グリッパーは既定では入力によらず固定値を送る():
+    """実機ではグリッパーでカメラを挟んでおり、angle6 を変えるとカメラが落ちる。
+
+    開閉の対応(推測)を実測して追従させるようにしたら、このテストを見直すこと。
+    """
+    for opening in (0.0, 0.0165, 0.033, 0.5):
+        angles, _ = convert([0] * 6 + [opening, opening])
+        assert angles[6] == pytest.approx(DEFAULT_GRIPPER_FIXED_DEG)
+    assert DEFAULT_GRIPPER_FIXED_DEG == pytest.approx(13.2)
+
+
 def test_グリッパーは開いている方の軸を採って正規化される():
     """simは prismatic 2軸[m]、D1 は angle6 の1値。"""
     angles, _ = to_servo_degrees([0] * 6 + [0.0, 0.033], SIGNS, OFFSETS,
                                  gripper_open_m=0.033,
-                                 gripper_closed_deg=0.0, gripper_open_deg=60.0)
+                                 gripper_closed_deg=0.0, gripper_open_deg=60.0,
+                                 gripper_fixed_deg=None)
     assert angles[6] == pytest.approx(60.0)
 
     angles, _ = to_servo_degrees([0] * 6 + [0.0165, 0.0], SIGNS, OFFSETS,
                                  gripper_open_m=0.033,
-                                 gripper_closed_deg=0.0, gripper_open_deg=60.0)
+                                 gripper_closed_deg=0.0, gripper_open_deg=60.0,
+                                 gripper_fixed_deg=None)
     assert angles[6] == pytest.approx(30.0)
 
 
 def test_グリッパーは開き量を超えても飽和する():
     angles, _ = to_servo_degrees([0] * 6 + [0.5, 0.0], SIGNS, OFFSETS,
                                  gripper_open_m=0.033,
-                                 gripper_closed_deg=0.0, gripper_open_deg=60.0)
+                                 gripper_closed_deg=0.0, gripper_open_deg=60.0,
+                                 gripper_fixed_deg=None)
     assert angles[6] == pytest.approx(60.0)
 
 
