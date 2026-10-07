@@ -91,7 +91,7 @@ def test_グリッパーは既定では入力によらず固定値を送る():
     for opening in (0.0, 0.0165, 0.033, 0.5):
         angles, _ = convert([0] * 6 + [opening, opening])
         assert angles[6] == pytest.approx(DEFAULT_GRIPPER_FIXED_DEG)
-    assert DEFAULT_GRIPPER_FIXED_DEG == pytest.approx(13.2)
+    assert DEFAULT_GRIPPER_FIXED_DEG == pytest.approx(-12.6)   # 2026-10-01 D405 に交換後の値
 
 
 def test_グリッパーは開いている方の軸を採って正規化される():

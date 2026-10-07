@@ -22,9 +22,11 @@ FUNCODE_MULTI_JOINT = 2
 FUNCODE_ENABLE = 5
 FUNCODE_ZERO = 7
 
-# グリッパー(angle6)の既定の固定値[度]。**実機ではグリッパーでカメラ(D435i)の支柱を
-# 挟んでおり、この値から変えるとカメラが落ちる**(2026-09-28 実機。#78 の inspect_poses.json と同じ値)。
-DEFAULT_GRIPPER_FIXED_DEG = 13.2
+# グリッパー(angle6)の既定の固定値[度]。**実機ではグリッパーでカメラの支柱を挟んでおり、
+# この値から変えるとカメラが落ちる。** カメラを付け直すと値が変わる:
+#   2026-09-28 D435i: 13.2 / 2026-10-01 D405 に交換して挟み直し: -12.6（今の値）
+# #78 の inspect_poses.json の gripper と必ず同じ値にすること。
+DEFAULT_GRIPPER_FIXED_DEG = -12.6
 
 
 def to_servo_degrees(values, signs, offsets,

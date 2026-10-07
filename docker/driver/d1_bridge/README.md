@@ -106,7 +106,7 @@ ros2 run d1_arm_demo arm_demo_node --ros-args \
 | `joint_signs` | `[1,1,1,1,1,1]` | 関節の回転方向。**実機で目視照合してから埋める**。`-1` のように整数で書いてもよい |
 | `joint_offsets_deg` | `[0,0,0,0,0,0]` | 同上、原点のずれ |
 | `gripper_follow_command` | `false` | false の間は `angle6` に `gripper_fixed_deg` を送り続け、`arm_command` のグリッパー値は無視する |
-| `gripper_fixed_deg` | `13.2` | グリッパーの固定値[度]。**実機ではグリッパーでカメラ(D435i)を挟んでおり、変えるとカメラが落ちる**(2026-09-28 実機) |
+| `gripper_fixed_deg` | `-12.6` | グリッパーの固定値[度]。**実機ではグリッパーでカメラを挟んでおり、変えるとカメラが落ちる**。カメラを付け直すと変わる（9/28 D435i: 13.2 → 10/1 D405: -12.6）。#78 の `inspect_poses.json` の `gripper` と同じ値にすること |
 | `gripper_open_m` / `gripper_closed_deg` / `gripper_open_deg` | `0.033` / `0` / `0` | `gripper_follow_command:=true` のときだけ使う。simの prismatic 2軸[m] を `angle6` へ割り当てる。**対応は推測のまま**。開閉の角度が同じだと起動を拒否する |
 
 出力トピックは `/arm_Command` 固定の既定（DDS 上で `rt/arm_Command`。機体が購読している名前）。
@@ -126,7 +126,7 @@ ros2 run d1_arm_demo arm_demo_node --ros-args \
   上流の間隔（`d1_arm_demo` の `step_interval` 既定30秒）を下限以上にしておけば待ちは生じない
 - **`zero_pose` は下限を無視してすぐ送り、送信待ちの指令は捨てる。** 戻したい瞬間に
   最大25秒待たせないため。捨てないと、戻したあとで古い指令がアームをまた動かす
-- **グリッパーは既定で固定値（13.2度）を送る。** funcode 2 は angle0..angle6 を必ず含むので
+- **グリッパーは既定で固定値（-12.6度）を送る。** funcode 2 は angle0..angle6 を必ず含むので
   「送らない」はできない。未確定の対応から計算すると、その値へ能動的に駆動してしまう
 - **`seq` は毎回変える。** Go2 本体では `header.identity.id` を固定したまま同じ内容を
   送り続けると機体が重複とみなして無視する、という実機実測がある（前進効率 40%→83%）。
