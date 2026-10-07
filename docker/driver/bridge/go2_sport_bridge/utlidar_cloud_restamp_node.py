@@ -44,6 +44,10 @@ _DEFAULT_REPORT_PERIOD = 10.0
 # このノードが挟まったままだと精度をわずかに損なうだけの存在になるため)。
 _CLOCKS_AGREE_SEC = 0.2
 
+# 報告と報告の間で差がこれ以上変わったら警告する。差は約1110秒でほぼ一定のはずなので、
+# 急に変わったときは機体側で何か起きている(再起動・NTPが効き始めた等)合図。
+_OFFSET_JUMP_SEC = 1.0
+
 
 class UtlidarCloudRestampNode(Node):
     """`/utlidar/cloud`のheader.stampを開発PCの壁時計で打ち直して中継する。
@@ -63,6 +67,7 @@ class UtlidarCloudRestampNode(Node):
 
         self._count = 0
         self._last_report_ns = None
+        self._last_report_offset = None
         self._agree_warned = False
 
         self.get_logger().info(
@@ -90,13 +95,23 @@ class UtlidarCloudRestampNode(Node):
                 f'機体クロックとの差: {offset_sec:+.3f}s '
                 '(正=機体が遅れている)。この分だけstampを進めて中継する')
             self._last_report_ns = now_ns
+            self._last_report_offset = offset_sec
             self._check_agreement(offset_sec)
             return
 
         if (now_ns - self._last_report_ns) / 1e9 >= self._report_period:
             self.get_logger().info(
                 f'機体クロックとの差: {offset_sec:+.3f}s / 中継 {self._count} 通')
+            jump = offset_sec - self._last_report_offset
+            if abs(jump) >= _OFFSET_JUMP_SEC:
+                self.get_logger().warn(
+                    f'機体クロックとの差が前回の報告から {jump:+.3f}s 変わった。'
+                    '機体の再起動・時刻同期など、機体側で時計が動いた可能性がある')
             self._last_report_ns = now_ns
+            self._last_report_offset = offset_sec
+            # 1通目だけでなく定期報告のたびに見る。起動直後はずれていて途中で揃う場合
+            # (機体側のNTPが後から効く等)も拾うため。警告は一度きり
+            self._check_agreement(offset_sec)
 
     def _check_agreement(self, offset_sec):
         if self._agree_warned or abs(offset_sec) >= _CLOCKS_AGREE_SEC:
