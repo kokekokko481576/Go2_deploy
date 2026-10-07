@@ -61,9 +61,14 @@ docker compose exec driver ros2 run go2_sport_bridge jog.sh vx 0.20 1.0
 docker compose exec driver ros2 run go2_sport_bridge estop.sh
 ```
 
-`jog.sh`は`/cmd_vel`を直接叩く(dev側の`cmd_vel_safety`を経由しない)。
-`estop.sh`はブリッジを`pkill`してから停止指令を3秒間直接送る。**ブリッジを落とすだけでは
+`jog.sh`は、dev側の`cmd_vel_safety`が動いていれば`/cmd_vel_raw`に送って安全フィルタを経由させ、
+動いていなければ`/cmd_vel`を直接叩く(どちらに送ったかを起動時に表示する)。
+`/cmd_vel`は`cmd_vel_safety`の出力でもあるので、稼働中に直接叩くとゼロ速度と混ざって半分しか効かない。
+`estop.sh`はブリッジを`pkill`してから停止指令(`estop_send_node`)を直接送る。**ブリッジを落とすだけでは
 止まらない**(機体が最後の指令のまま歩き続ける恐れがある)ため、この順序が要る。
+停止指令は1つのプロセスで publisher を生かしたまま、機体の購読が見えてから3秒間送る
+(機体が見えないまま6秒経つと打ち切り、終了コード1で知らせる)。
+`real_up.sh down`も最初に`estop.sh`を実行する。
 
 ### 実機で踏んだ罠(2026-09-02 実測、別プロジェクトでの検証結果を反映)
 
@@ -204,6 +209,15 @@ ROS2側が先に解決されると `free(): invalid pointer` で落ちる。
   StopMove(1003)とゼロ速度Moveが配信されることを確認
 - `estop.sh`が**購読者不在でもハングせず3.4秒で完走する**ことを確認
   (`ros2 topic pub --once`は既定で購読者を待つため`-w 0`が必須)
+
+### 停止系の改修(2026-10-07、`--network none`のコンテナ内ループバック、#72レビュー対応)
+
+- `estop.sh`: 購読者不在 → 6秒で打ち切り、終了コード1と「届いていない可能性が高い」を表示。
+  購読者あり → ゼロ速度Move 60件・StopMove 3件を約3秒間で受信、IDの重複なし
+- `cmd_vel_to_sport_node`に0.05秒間隔でSIGINTを2回 → 最後の受信がゼロ速度Move→StopMoveの順で、
+  正常終了する。**改修前は2回目のSIGINTで`finally`の途中からTracebackを出して抜けていた**
+- `real_up.sh down`: 0.2m/sで走行指令中に実行 → estop.shが先に走り、以降はゼロ速度Moveのみが届く
+- `jog.sh`: `/cmd_vel_raw`の購読者が無いときは`/cmd_vel`、居るときは`/cmd_vel_raw`を選ぶ
 
 未実施(実機が必要なため): 上記はいずれもループバックでの確認であり、
 **「機体が実際に歩くか」は実機でしか確認できない**(Issue #3)。
