@@ -208,7 +208,10 @@ start_driver_nodes() {
     sleep 2
     local off
     off=$(docker exec "$DRIVER" bash -c "grep -o '機体クロックとの差: [^ /]*' /tmp/restamp_base.log | tail -1")
+    # 最初の点群が来るまで差はログに出ない。空でも起動は成功しているので、
+    # 関数の戻り値を [ -n ] の結果にしない(呼び出し側が「起動に失敗」で止まる)
     [ -n "$off" ] && log "  $off (この分だけstampを進めて中継している)"
+    return 0
 }
 
 start_dev_chain() {
