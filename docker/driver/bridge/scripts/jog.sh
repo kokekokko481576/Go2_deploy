@@ -12,8 +12,11 @@
 # 事前に: 起立(go2_sport_client 4)＋**機体が「通常モード」であること**、
 # そして cmd_vel_to_sport_node を別ターミナルで起動しておくこと。
 #
-# **このスクリプトは /cmd_vel を直接叩く**（dev側の cmd_vel_safety を経由しない）。
-# 速度クランプはブリッジ側の上限しか掛からない点に注意。
+# 出力先は起動時に決める。dev側の cmd_vel_safety が動いていれば /cmd_vel_raw に送り、
+# 安全フィルタを経由させる。/cmd_vel に直接送ると、cmd_vel_safety が指令の途絶中に
+# 20Hzで出しているゼロ速度と交互に混ざり、機体には実質半分の指令しか届かない
+# (「jogを打っても進まない」に見える)。
+# 動いていなければ /cmd_vel を直接叩く(ブリッジ単体の確認。クランプはブリッジ側の上限のみ)。
 #
 # **0.15m/s 未満を指定しても機体は進まない。** Go2の歩容はそこが下限で、
 # それ未満は胴体が揺れるだけになる(2026-09-02実機実測)。符号確認は 0.20 程度で行う。
@@ -36,8 +39,19 @@ case "$AXIS" in
   *)  echo "軸は vx|vy|wz"; exit 1 ;;
 esac
 
+# ros2 daemon のキャッシュは実際に居ないノードを返すことがあるので --no-daemon で数える
+SUBS=$(ros2 topic info /cmd_vel_raw --no-daemon --spin-time 2 2>/dev/null \
+    | awk '/^Subscription count:/ {print $3}')
+if [ "${SUBS:-0}" -ge 1 ]; then
+    TOPIC=/cmd_vel_raw
+    echo "[jog] cmd_vel_safety が動いているので /cmd_vel_raw に送る(安全フィルタの上限が掛かる)"
+else
+    TOPIC=/cmd_vel
+    echo "[jog] cmd_vel_safety が見えないので /cmd_vel に直接送る(上限はブリッジ側のみ)"
+fi
+
 echo "[jog] $AXIS = $VAL を ${DUR}s。合図から動きます。"
 echo "[jog] 止めたいときは Ctrl-C（ブリッジのウォッチドッグが停止指令を出します）"
 sleep 1
-timeout "$DUR" ros2 topic pub -r 20 /cmd_vel geometry_msgs/msg/Twist "$TW" > /dev/null 2>&1 || true
+timeout "$DUR" ros2 topic pub -r 20 "$TOPIC" geometry_msgs/msg/Twist "$TW" > /dev/null 2>&1 || true
 echo "[jog] 指令を止めました。ウォッチドッグが停止指令を出します。"
