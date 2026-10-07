@@ -7,7 +7,7 @@
 // 使い方(driverコンテナ内、run.sh 経由で LD_LIBRARY_PATH を効かせる):
 //   /root/d1_bridge_tools/run_probe.sh
 // 別端末で:
-//   ros2 run d1_arm_bridge arm_bridge_node --ros-args -r arm_command_out:=/arm_Command -p dry_run:=false
+//   ros2 run d1_arm_bridge arm_bridge_node --ros-args -p dry_run:=false
 //   ros2 topic pub --once /arm_command std_msgs/msg/Float64MultiArray "{data: [0.1,0,0,0,0,0,0,0]}"
 #include <iostream>
 #include <unistd.h>

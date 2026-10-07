@@ -79,11 +79,10 @@ SDK 同梱サンプルがこの通りに書かれており、2026-08-28 に**こ
 
 ```bash
 # driverコンテナで。まずは dry_run のまま（既定）で JSON を見る
-ros2 run d1_arm_bridge arm_bridge_node --ros-args -r arm_command_out:=/arm_Command
+ros2 run d1_arm_bridge arm_bridge_node
 
-# 実機へ出すとき
-ros2 run d1_arm_bridge arm_bridge_node --ros-args \
-  -r arm_command_out:=/arm_Command -p dry_run:=false -p min_command_interval:=25.0
+# 実機へ出すとき（出力先は既定で機体の購読と同じ /arm_Command = rt/arm_Command）
+ros2 run d1_arm_bridge arm_bridge_node --ros-args -p dry_run:=false
 ```
 
 `d1_arm_demo` 側は送信先を変えるだけ:
@@ -102,10 +101,16 @@ ros2 run d1_arm_demo arm_demo_node --ros-args \
 | `dry_run` | **`true`** | true の間は JSON をログに出すだけで送らない。**実機へ出すときだけ false にする** |
 | `mode` | `1` | funcode 2 の平滑化モード |
 | `address` | `1` | |
-| `min_command_interval` | `1.0` | 送信間隔の下限[s]。**実機では25〜30にする**（後述） |
-| `joint_signs` | `[1,1,1,1,1,1]` | 関節の回転方向。**実機で目視照合してから埋める** |
+| `min_command_interval` | `25.0` | 送信間隔の下限[s]（後述）。下限に満たない指令は捨てずに待たせて順に送る |
+| `max_pending` | `10` | 送信待ちの上限。超えた指令は error を出して捨てる |
+| `joint_signs` | `[1,1,1,1,1,1]` | 関節の回転方向。**実機で目視照合してから埋める**。`-1` のように整数で書いてもよい |
 | `joint_offsets_deg` | `[0,0,0,0,0,0]` | 同上、原点のずれ |
-| `gripper_open_m` / `gripper_closed_deg` / `gripper_open_deg` | `0.033` / `0` / `0` | simの prismatic 2軸[m] を D1 の `angle6` へ割り当てる。**対応は推測のまま** |
+| `gripper_follow_command` | `false` | false の間は `angle6` に `gripper_fixed_deg` を送り続け、`arm_command` のグリッパー値は無視する |
+| `gripper_fixed_deg` | `13.2` | グリッパーの固定値[度]。**実機ではグリッパーでカメラ(D435i)を挟んでおり、変えるとカメラが落ちる**(2026-09-28 実機) |
+| `gripper_open_m` / `gripper_closed_deg` / `gripper_open_deg` | `0.033` / `0` / `0` | `gripper_follow_command:=true` のときだけ使う。simの prismatic 2軸[m] を `angle6` へ割り当てる。**対応は推測のまま**。開閉の角度が同じだと起動を拒否する |
+
+出力トピックは `/arm_Command` 固定の既定（DDS 上で `rt/arm_Command`。機体が購読している名前）。
+別名にしたいときだけ `-r /arm_Command:=...` で remap する。
 
 ## 安全のための作り
 
@@ -113,7 +118,16 @@ ros2 run d1_arm_demo arm_demo_node --ros-args \
 - **可動域を超える角度はクランプする**（J1/J4/J6 ±135度、J2/J3/J5 ±90度。公称スペック）
 - **`min_command_interval` で送信間隔に下限**を設ける。D1 は連続コマンドで数分後に
   無応答化するという他ラボの報告があり（`docs/計画/アーム動作.md` §4-3）、
-  低頻度の離散コマンドが基本方針。実機では 25〜30 秒にすること
+  低頻度の離散コマンドが基本方針。既定を実機向けの 25 秒にしてある
+- **下限に満たない指令は捨てず、待ち行列に積んで順番どおりに送る**（`pacer.py`）。
+  捨てると上流のウェイポイントが黙って抜け、アームが途中の姿勢のまま上流が完了を報告する。
+  最新の1件だけ残す形にもしていない。`d1_arm_demo` は1関節ずつの指令を順に送っており、
+  途中を飛ばすと多関節同時指令（simで j1 が可動域上限へ走る条件）になるため。
+  上流の間隔（`d1_arm_demo` の `step_interval` 既定30秒）を下限以上にしておけば待ちは生じない
+- **`zero_pose` は下限を無視してすぐ送り、送信待ちの指令は捨てる。** 戻したい瞬間に
+  最大25秒待たせないため。捨てないと、戻したあとで古い指令がアームをまた動かす
+- **グリッパーは既定で固定値（13.2度）を送る。** funcode 2 は angle0..angle6 を必ず含むので
+  「送らない」はできない。未確定の対応から計算すると、その値へ能動的に駆動してしまう
 - **`seq` は毎回変える。** Go2 本体では `header.identity.id` を固定したまま同じ内容を
   送り続けると機体が重複とみなして無視する、という実機実測がある（前進効率 40%→83%）。
   D1 で同じ挙動をするかは未確認だが、固定にする理由が無いので増やしている
@@ -192,7 +206,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest docker/driver/d1_bridge/d1_arm_bridge/te
 docker compose -f docker/driver/compose.yaml run --rm -d --name d1test driver sleep 3600
 docker exec -d d1test bash -c 'source /setup_dds.sh; /root/d1_bridge_tools/run_probe.sh 45 > /tmp/probe.log 2>&1'
 docker exec -d d1test bash -c 'source /setup_dds.sh; ros2 run d1_arm_bridge arm_bridge_node \
-  --ros-args -r arm_command_out:=/arm_Command -p dry_run:=false -p min_command_interval:=0.5 > /tmp/bridge.log 2>&1'
+  --ros-args -p dry_run:=false -p min_command_interval:=0.5 > /tmp/bridge.log 2>&1'
 docker exec d1test bash -c 'source /setup_dds.sh; ros2 topic pub --once /arm_command \
   std_msgs/msg/Float64MultiArray "{data: [1.57, 1.2, 0, 0, 0, 0, 0, 0]}"'
 docker exec d1test cat /tmp/probe.log
