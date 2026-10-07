@@ -7,7 +7,9 @@ set -u
 C=go2-sim
 R() { docker exec "$C" bash -c ". /opt/ros/jazzy/setup.bash && source \$WORKSPACE_DIR/install/setup.bash && $1"; }
 # 世界座標: 機体の止まる位置 x=-4.31, y=1.5。前の股関節 x=-4.503。部材の手前の縁 y=1.842
-MEMBER_SDF='<sdf version="1.9"><model name="member"><static>true</static><pose>-4.153 1.992 0 0 0 0</pose>
+# MEMBER_DX / MEMBER_DY[m] で部材をずらせる（2026-10-07、撮影位置の補正の動画用。+Y=機体から遠ざかる）
+MX=$(python3 -c "print(round(-4.153 + ${MEMBER_DX:-0}, 4))"); MY=$(python3 -c "print(round(1.992 + ${MEMBER_DY:-0}, 4))")
+MEMBER_SDF='<sdf version="1.9"><model name="member"><static>true</static><pose>'"$MX $MY"' 0 0 0 0</pose>
 <link name="base"><pose>0 0 0.006 0 0 0</pose>
  <visual name="v"><geometry><box><size>0.70 0.30 0.012</size></box></geometry>
   <material><ambient>0.35 0.30 0.25 1</ambient><diffuse>0.45 0.38 0.30 1</diffuse></material></visual>
