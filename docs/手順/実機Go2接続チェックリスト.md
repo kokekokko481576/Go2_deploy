@@ -147,12 +147,12 @@ docker compose exec driver ros2 run go2_sport_bridge estop.sh
 
 ```bash
 # driverコンテナ: 1軸ずつ(前進 / 左 / 左旋回)。正の向きは REP-103
-docker compose exec driver ros2 run go2_sport_bridge jog.sh vx 0.20 1.0
-docker compose exec driver ros2 run go2_sport_bridge jog.sh wz 0.30 1.0
+docker compose exec driver ros2 run go2_sport_bridge jog.sh vx 0.40 1.0
+docker compose exec driver ros2 run go2_sport_bridge jog.sh wz 0.60 1.0
 ```
 
-- [ ] `jog.sh vx 0.20 1.0` で前進する(**0.15m/s未満では進まない**。下記「安全上の注意」参照)
-- [ ] `jog.sh wz 0.30 1.0` で左(反時計回り)に旋回する
+- [ ] `jog.sh vx 0.40 1.0` で前進する(**0.20以下では足が出ない、実用下限は0.35**。下記「安全上の注意」参照)
+- [ ] `jog.sh wz 0.60 1.0` で左(反時計回り)に旋回する
 - [ ] 指令を止めてからウォッチドッグが作動し、Go2が停止することを確認
 - [ ] `estop.sh` で確実に停止することを確認
 
@@ -161,7 +161,7 @@ docker compose exec driver ros2 run go2_sport_bridge jog.sh wz 0.30 1.0
 ```bash
 # devコンテナ: 安全フィルタ
 docker compose exec ros2 ros2 run cmd_vel_safety cmd_vel_safety_node \
-  --ros-args -p max_linear_x:=0.22 -p max_linear_y:=0.18 -p max_angular_z:=0.45
+  --ros-args -p max_linear_x:=0.45 -p max_linear_y:=0.18 -p max_angular_z:=1.10
 
 # devコンテナ: テレオペ(別ターミナル)
 docker compose exec ros2 ros2 run teleop_twist_keyboard teleop_twist_keyboard \
@@ -180,10 +180,13 @@ docker compose exec ros2 ros2 run teleop_twist_keyboard teleop_twist_keyboard \
   (リモコン・電源ボタン等)を使う準備をしておく。**リモコンが最後の砦**なので、
   リモコンの操作権をAPIに渡す設定(`UseRemoteCommandFromApi`)では走らせないこと
 - **`cmd_vel_safety`の既定上限(`max_linear_x=1.0`, `max_angular_z=1.0`)は実機には高すぎる。**
-  実機で詰めた実績値は `max_linear_x=0.22` / `max_linear_y=0.18` / `max_angular_z=0.45`
-  (2026-09-02)。上のコマンド例のように明示的に下げてから使う
-- **ただし0.15m/s程度を下回る上限にしてはいけない。** Go2の歩容はそこが下限で、それ未満は
-  胴体が揺れるだけで前に進まない。「まず低速から」と0.1m/s以下で試すと「動かない」と誤認する
+  上のコマンド例の `max_linear_x=0.45` / `max_linear_y=0.18` / `max_angular_z=1.10` まで明示的に下げてから使う
+- **ただし実用下限(前進0.35m/s・旋回0.60rad/s)を下回る上限にしてはいけない。**
+  2026-09-23の実機実測(#75)で、前進は指令0.20で実動率34%と足が出ず、
+  指令:実速度 = 0.25:0.107 / 0.30:0.181 / 0.35:0.234 / 0.40:0.285 / 0.50:0.383 [m/s]、
+  0.30以下は直進性も崩れた。「まず低速から」と0.2m/s以下で試すと「動かない」と誤認する。
+  (2026-09-02時点では上限0.22・下限0.15m/sとしていたが、この実測で改めた。
+  上限0.22では足がほとんど出ない)
 
 ### 4. 顎3D LiDARの搭載位置キャリブレーション(Issue #4・C3)
 

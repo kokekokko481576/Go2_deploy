@@ -55,7 +55,7 @@ StandUp前にMoveを送っても効果が無い/意図しない挙動の可能�
 
 ```bash
 # 1軸だけ短時間動かして符号・速さを確かめる(初回は必ずこれから)
-docker compose exec driver ros2 run go2_sport_bridge jog.sh vx 0.20 1.0
+docker compose exec driver ros2 run go2_sport_bridge jog.sh vx 0.40 1.0
 
 # 非常停止。別ターミナルで常に打てる状態にしてから走らせること
 docker compose exec driver ros2 run go2_sport_bridge estop.sh
@@ -85,8 +85,8 @@ docker compose exec driver ros2 run go2_sport_bridge estop.sh
 - **StopMoveを連投してはいけない**。20Hzで送り続けると機体の移動指令の受け付けを妨げ、
   リモコン操作とも競合する。ウォッチドッグ作動時は「遷移時にStopMoveを1回」+
   「以降はゼロ速度のMoveのみ」にしてある
-- **0.15m/s程度がGo2の歩容の下限**。それ未満は胴体が揺れるだけで前に進まない。
-  「まず低速から」と思って0.1m/s以下で試すと「動かない」と誤認する
+- **前進は0.20m/s以下だと足がほとんど出ない**(実動率34%)。0.30以下は直進性も崩れ、実用下限は0.35
+  (2026-09-23実測、#75。9/02時点では下限0.15としていた)。「まず低速から」と低速で試すと「動かない」と誤認する
 - **横移動(`linear.y`)はほとんど効かない。それどころか前進を殺す**。`vy=-0.056`程度でも
   実速度がゼロになった。正対に近い接近では`vy`を0にして前進と旋回だけで組むこと
 - **`obstacles_avoid`経由(障害物回避あり)は物理リモコンを奪う**。回避を効かせるには
