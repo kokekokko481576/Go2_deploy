@@ -26,6 +26,16 @@
   python3 inspect_run.py --approach manual --posture stand      # リモコンで寄せて、立ったまま
   python3 inspect_run.py --approach marker --posture lie        # マーカーで接近し、伏せてから
   python3 inspect_run.py --approach manual --posture lie --dry-run   # 何も動かさず流れだけ確認
+  python3 inspect_run.py --approach marker --posture lie --fast-path # 伏せの展開を3段で（多関節同時。実機未試験）
+
+アームとのやり取り（2026-10-07〜）: 既定で ~/d1_sdk の arm_server を常駐させ、送信と角度の読み取りを続ける
+（以前は段ごとに set_joints と get_arm_joint_angle を起動して1段約5秒かかっていた）。`--arm-io cli` で以前の方式に戻せる。
+送って --resend-after 秒（既定2秒）たってもアームが動き出さなければすぐ再送する。
+
+撮影位置の補正（--aim-correct、2026-10-07〜、実機未試験）: 撮影姿勢に着いたら試し撮りし、深度で隅肉の根元
+（ベース板とそれに垂直な縦板の交線）を見つけて、根元が画面の中央・距離 --aim-dist に来るようアームを直す
+（aim_correct.py。最大 --aim-iter 回）。手首を振る3枚は直した姿勢を中心に撮る。収納は補正を逆にたどってから。
+見つからない・安全に動かせないときは、直さずにそのまま撮る。試し撮りは <名前>_probeN として残る。
 """
 import argparse
 import json
@@ -51,6 +61,73 @@ API = {'STANDUP': 1004, 'STANDDOWN': 1005, 'BALANCESTAND': 1002, 'STOPMOVE': 100
 
 class Abort(Exception):
     pass
+
+
+class ArmLink:
+    """~/d1_sdk の arm_server を常駐させ、指令の送信と関節角の読み取りを行う（2026-10-07）。
+
+    set_joints / get_arm_joint_angle を毎回起動すると1段に約5秒かかっていた
+    （DDSのディスカバリー待ち1.2秒＋角度を4秒読む。アームは1回目の確認の時点でもう着いている）。
+    常駐させれば、角度は届いたそばから読める。sim では d1_fake.py arm_server が同じ行を話す。
+    """
+
+    def __init__(self, cmd, log):
+        self.log = log
+        self.lock = threading.Lock()
+        self.angles = None       # 最新の angle0〜6
+        self.stamp = 0.0         # それを受け取った時刻（time.time()）
+        self.ready = threading.Event()
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        threading.Thread(target=self._read, daemon=True).start()
+        if not self.ready.wait(10.0):
+            self.close()
+            raise Abort(f'アームの常駐プロセスが起動しない: {" ".join(cmd)}')
+
+    def _read(self):
+        for line in self.proc.stdout:
+            parts = line.split()
+            if not parts:
+                continue
+            if parts[0] == 'ready':
+                self.ready.set()
+            elif parts[0] == 'A' and len(parts) == 9:
+                with self.lock:
+                    self.angles = [float(v) for v in parts[2:]]
+                    self.stamp = time.time()
+            elif parts[0] in ('E', 'F'):
+                self.log(f'    [arm_server] {line.strip()}')
+
+    def latest(self, timeout=3.0, max_age=1.5):
+        """(角度, 受け取った時刻) を返す。max_age 秒以内に届いたものが timeout 秒待っても無ければ Abort。
+
+        実機の D1 が角度を何Hzで出すかは未計測なので、鮮度の条件は緩めにしてある。
+        """
+        t0 = time.time()
+        while True:
+            with self.lock:
+                if self.angles is not None and time.time() - self.stamp <= max_age:
+                    return list(self.angles), self.stamp
+            if self.proc.poll() is not None:
+                raise Abort('アームの常駐プロセスが終了している')
+            if time.time() - t0 > timeout:
+                raise Abort('アームの角度が届かない（D1の電源・通信を確認）')
+            time.sleep(0.05)
+
+    def send(self, pose7):
+        try:
+            self.proc.stdin.write('set ' + ' '.join(f'{v:g}' for v in pose7) + '\n')
+            self.proc.stdin.flush()
+        except (BrokenPipeError, OSError) as e:
+            raise Abort(f'アームの常駐プロセスへ送れない: {e}')
+
+    def close(self):
+        try:
+            self.proc.stdin.write('quit\n')
+            self.proc.stdin.flush()
+            self.proc.wait(2.0)
+        except Exception:
+            self.proc.kill()
 
 
 class Robot:
@@ -163,6 +240,8 @@ class Runner:
         self.cur_index = None       # いま deploy の何番目にいるか（収納の起点）
         self.bracket_dirty = False  # 撮影のために関節を振っていて、基準の姿勢から外れている
         self.robot = None if a.dry_run else Robot()
+        self.arm = None   # ArmLink（--arm-io server のとき、run() の中で起動する）
+        self.corr_path = []   # 撮影位置の補正でたどった姿勢（先頭が基準の撮影姿勢）。収納はこれを逆にたどってから
         LOG_DIR.mkdir(exist_ok=True)
         self.logf = open(LOG_DIR / time.strftime('inspect_%m%d_%H%M%S.log'), 'w', buffering=1)
 
@@ -199,9 +278,11 @@ class Runner:
 
     # ---- アーム ----
     def read_arm(self):
-        """angle0〜6 を返す。get_arm_joint_angle を数秒だけ走らせて最後の行を読む。"""
+        """angle0〜6 を返す。常駐プロセスがあればその最新値、無ければ get_arm_joint_angle を数秒だけ走らせて最後の行を読む。"""
         if self.a.dry_run:
             return None
+        if self.arm is not None:
+            return self.arm.latest()[0]
         try:
             out = subprocess.run(['timeout', '4', str(D1), 'get_arm_joint_angle'],
                                  capture_output=True, text=True).stdout
@@ -218,18 +299,91 @@ class Runner:
         self.say(f'  アーム {label}: set_joints {" ".join(cmd[2:])}')
         if self.a.dry_run:
             return
+        if self.arm is not None:
+            return self._arm_to_server(list(pose) + [self.grip])
         subprocess.run(cmd, capture_output=True, text=True)
         t0 = time.time()
+        resent = False
         while True:
             now = self.read_arm()
             err = max(abs(now[i] - pose[i]) for i in range(6))
             if err <= self.tol:
                 self.say(f'    到達（最大ずれ {err:.1f}度）')
                 return
-            if time.time() - t0 > self.a.arm_timeout:
+            elapsed = time.time() - t0
+            # DDSの送信が稀に届かないことがある（set_joints.cppのコメント参照）。
+            # 半分の時間が過ぎても届いた形跡がなければ1回だけ再送する。
+            if not resent and elapsed > self.a.arm_timeout / 2:
+                self.say(f'    届いていない（最大ずれ {err:.1f}度）。再送します')
+                subprocess.run(cmd, capture_output=True, text=True)
+                resent = True
+            if elapsed > self.a.arm_timeout:
                 raise Abort(f'アームが指令に届かない（最大ずれ {err:.1f}度、実測 '
                             f'{" ".join(f"{v:.1f}" for v in now[:6])}）')
             time.sleep(0.5)
+
+    def _arm_to_server(self, pose7):
+        """常駐プロセス経由で送り、到達を0.1秒ごとに確かめる。
+
+        到達 = 6軸すべてが許容内で、直前の読みからほぼ動いていない（通過中を到達と取らない）。
+        送ってから resend_after 秒たっても**どの関節もほとんど動いていない**ときは、
+        指令が届かなかったとみなしてすぐ再送する（以前は arm_timeout の半分=5秒待ってから再送していた）。
+        """
+        start, prev_stamp = self.arm.latest()
+        self.arm.send(pose7)
+        t0 = time.time()
+        resent = False
+        prev = start
+        while True:
+            time.sleep(0.1)
+            now, stamp = self.arm.latest()
+            err = max(abs(now[i] - pose7[i]) for i in range(6))
+            fresh = stamp > prev_stamp      # 前回から新しい角度が届いたか（届く頻度は未計測）
+            step = max(abs(now[i] - prev[i]) for i in range(6))
+            if fresh:
+                prev, prev_stamp = now, stamp
+            elapsed = time.time() - t0
+            if err <= self.tol and fresh and step <= 0.5:
+                self.say(f'    到達（最大ずれ {err:.1f}度、{elapsed:.1f}秒）')
+                return
+            moved = max(abs(now[i] - start[i]) for i in range(6))
+            if not resent and elapsed > self.a.resend_after and moved < 1.0:
+                self.say(f'    {elapsed:.1f}秒たっても動き出さない（最大ずれ {err:.1f}度）。再送します')
+                self.arm.send(pose7)
+                resent = True
+            if elapsed > self.a.arm_timeout:
+                raise Abort(f'アームが指令に届かない（最大ずれ {err:.1f}度、実測 '
+                            f'{" ".join(f"{v:.1f}" for v in now[:6])}）')
+
+    def _line_safe(self, p, q, lying):
+        import aim_pose
+        import merge_steps
+        aim_pose.FLOOR_Z = -0.125 if lying else aim_pose.ars.FLOOR_Z
+        return merge_steps.box_worst(p, q) == 0.0
+
+    def aim_correct(self, ref, name, lying):
+        """撮影の前に、深度で隅肉の根元を見つけてアームを直す（aim_correct.py）。直した姿勢を返す。"""
+        if self.a.dry_run:
+            self.say('  [補正] dry-run なので撮影位置の補正は行わない')
+            return list(ref)
+        import aim_correct
+        self.corr_path = [list(ref)]
+
+        def take(k):
+            self.snap(f'{name}_probe{k + 1}')
+            self.say(f'  試し撮り: {RS_OUT}/{name}_probe{k + 1}_color.png（見つけた根元は _root.png に緑の線で重ねる）')
+            return str(RS_OUT / f'{name}_probe{k + 1}')
+
+        def move(q):
+            self.check_temp('撮影位置の補正の前')
+            self.confirm(f'撮影位置を補正します: {q}')
+            self.arm_to(q, '撮影位置の補正')
+            self.corr_path.append(list(q))
+
+        q, ok = aim_correct.correct_loop(take, move, list(ref), list(ref), dist=self.a.aim_dist,
+                                         lying=lying, max_iter=self.a.aim_iter,
+                                         single=self.a.aim_single_joint, log=self.say)
+        return q
 
     def check_arm_start(self):
         if self.a.dry_run:
@@ -305,11 +459,18 @@ class Runner:
     def stow(self, seq):
         if self.cur_index is None or self.cur_index == 0:
             return
+        hold = self.corr_path[-1] if self.corr_path else seq[self.cur_index]
         if getattr(self, 'bracket_dirty', False):
             # 撮影のために関節を振った途中で止まった。まず基準の姿勢へ戻す（振った関節と次の段の関節を同時に動かさない）
-            self.confirm(f'撮影で振った関節を基準へ戻す {seq[self.cur_index]}')
-            self.arm_to(seq[self.cur_index], '撮影の基準姿勢へ戻す')
+            self.confirm(f'撮影で振った関節を基準へ戻す {hold}')
+            self.arm_to(hold, '撮影の基準姿勢へ戻す')
             self.bracket_dirty = False
+        if self.corr_path:
+            # 撮影位置の補正で動いた分を、来た順の逆に戻す（どの区間も干渉の確認済み）
+            for k, p in enumerate(reversed(self.corr_path[:-1])):
+                self.confirm(f'補正を戻す {p}')
+                self.arm_to(p, f'補正を戻す {k + 1}/{len(self.corr_path) - 1}')
+            self.corr_path = []
         back = list(range(self.cur_index - 1, -1, -1))
         self.say(f'収納します（{len(back)}段。展開の経路を逆にたどる）')
         for i in back:
@@ -321,6 +482,8 @@ class Runner:
         if self.cur_index is None or self.cur_index == 0:
             return
         print('\n手で収納するときは、上から順に1行ずつ:')
+        for p in reversed(self.corr_path[:-1]):
+            print(f'  {D1} set_joints {" ".join(f"{v:g}" for v in p)} {self.grip:g}   # 撮影位置の補正を戻す')
         for i in range(self.cur_index - 1, -1, -1):
             print(f'  {D1} set_joints {" ".join(f"{v:g}" for v in seq[i])} {self.grip:g}')
 
@@ -395,11 +558,20 @@ class Runner:
         a = self.a
         post = self.poses['postures'][a.posture]
         seq = post['deploy']
+        if a.fast_path:
+            # 複数の関節を1回で動かす経路（各関節がどの順に着いても干渉しないことをモデルで確認済み）。
+            # **実機での多関節同時指令は 2026-10-07 時点で未試験**なので既定では使わない
+            if 'deploy_fast' not in post:
+                self.say(f'[停止] {a.posture} には deploy_fast が無い')
+                return 1
+            seq = post['deploy_fast']
         self.say(f'開始: 接近={a.approach} 姿勢={a.posture} '
                  f'{"[dry-run 何も動かさない]" if a.dry_run else ""}{"[auto]" if a.auto else ""}')
         if post.get('provisional'):
             self.say(f'  [注意] {a.posture} の姿勢は**仮**です: {post.get("_説明", "")}')
         try:
+            if not a.dry_run and a.arm_io == 'server':
+                self.arm = ArmLink([str(D1), 'arm_server'], self.say)
             # 0. 開始前の確認
             self.check_temp('開始前')
             self.check_arm_start()
@@ -445,19 +617,26 @@ class Runner:
 
             # 4. 撮影（姿勢に bracket があれば、関節を振って複数枚）
             name = time.strftime(f'{a.name}_%m%d_%H%M%S')
+            hold = list(seq[-1])
+            if a.aim_correct:
+                hold = self.aim_correct(seq[-1], name, a.posture == 'lie')
             bracket = post.get('bracket') if not a.no_bracket else None
             if bracket:
                 j = bracket['joint']
-                self.confirm(f'撮影します（angle{j} を {bracket["angles"]} と振って{len(bracket["angles"])}枚）')
+                self.confirm(f'撮影します（angle{j} を基準から {[round(v - seq[-1][j], 1) for v in bracket["angles"]]} 度振って'
+                             f'{len(bracket["angles"])}枚）')
                 for k, ang in enumerate(bracket['angles']):
                     self.check_temp(f'撮影 {k + 1}/{len(bracket["angles"])} の前')
-                    p = list(seq[-1])
-                    p[j] = ang
-                    self.bracket_dirty = (ang != seq[-1][j])
-                    self.arm_to(p, f'撮影 {k + 1}/{len(bracket["angles"])}（angle{j}={ang:g}）')
-                    self.snap(f'{name}_{k + 1}_a{j}_{ang:g}')
+                    p = list(hold)
+                    p[j] = round(hold[j] + (ang - seq[-1][j]), 1)   # 振り幅は基準姿勢からの差で保つ
+                    if a.aim_correct and not self._line_safe(hold, p, a.posture == 'lie'):
+                        self.say(f'  撮影 {k + 1}: 補正後の姿勢から angle{j}={p[j]:g} へ振るとモデル上で干渉するので撮らない')
+                        continue
+                    self.bracket_dirty = (p[j] != hold[j])
+                    self.arm_to(p, f'撮影 {k + 1}/{len(bracket["angles"])}（angle{j}={p[j]:g}）')
+                    self.snap(f'{name}_{k + 1}_a{j}_{p[j]:g}')
                 # 基準の姿勢へ戻してから収納へ（収納は展開の経路を逆にたどるので、出発点を合わせる）
-                self.arm_to(seq[-1], '撮影の基準姿勢へ戻す')
+                self.arm_to(hold, '撮影の基準姿勢へ戻す')
                 self.bracket_dirty = False
             else:
                 self.confirm(f'撮影します（{name}）')
@@ -505,6 +684,8 @@ class Runner:
             self.print_manual_stow(seq)
             return 130
         finally:
+            if self.arm is not None:
+                self.arm.close()
             if self.robot is not None:
                 self.robot.close()
 
@@ -525,6 +706,18 @@ def main():
                     help='後脚股関節がこの温度[℃]以上なら止める（仮。転倒時は70〜71℃）')
     ap.add_argument('--tolerance', type=float, default=None, help='アーム到達の許容[度]')
     ap.add_argument('--arm-timeout', type=float, default=10.0)
+    ap.add_argument('--arm-io', choices=['server', 'cli'], default='server',
+                    help='server=arm_server を常駐させる（既定、速い）/ cli=従来どおり段ごとに set_joints と get_arm_joint_angle を起動する')
+    ap.add_argument('--resend-after', type=float, default=2.0,
+                    help='送ってからこの秒数たってもアームが動き出さなければ再送する（--arm-io server のみ）')
+    ap.add_argument('--aim-correct', action='store_true',
+                    help='撮影の前に深度で隅肉の根元を見つけ、アームの姿勢を直す（aim_correct.py。実機未試験）')
+    ap.add_argument('--aim-dist', type=float, default=0.22, help='補正で合わせるカメラ→根元の距離[m]')
+    ap.add_argument('--aim-iter', type=int, default=2, help='補正の最大回数')
+    ap.add_argument('--aim-single-joint', action='store_true',
+                    help='補正の動きを必ず1関節ずつにする（実機の多関節同時指令を確かめるまで）')
+    ap.add_argument('--fast-path', action='store_true',
+                    help='姿勢の deploy_fast（複数の関節を1回で動かす経路）を使う。**実機の多関節同時指令は未試験**')
     ap.add_argument('--approach-timeout', type=float, default=120.0)
     ap.add_argument('--d1-run', default=str(D1),
                     help='D1 SDK の run.sh（sim の通し試験では tools/sim_fakes/d1_fake.py を渡す）')

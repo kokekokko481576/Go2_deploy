@@ -12,6 +12,9 @@
 #   tools/sim_inspect_full.sh 1.3 0.02 3 5          # 距離[m] 横[m] 向き[度] seed
 #   USE_NORMAL=true tools/sim_inspect_full.sh       # 法線接近で比べる
 #   POSTURE=stand tools/sim_inspect_full.sh         # 立ったままアーム（既定は lie: 到着後に伏せて撮り、起立して終わる）
+#   INSPECT_ARGS="--fast-path" tools/sim_inspect_full.sh   # inspect_run.py に足す引数
+#   D1_FAKE_DROP=1 tools/sim_inspect_full.sh        # アームの代役が最初の指令を捨てる（届かない再現）
+#   SIM_RENDER=1 SIM_ROOT_DY=0.06 INSPECT_ARGS="--aim-correct" tools/sim_inspect_full.sh   # 撮影位置の補正（部材を6cm遠くに）
 set -u
 DIST=${1:-1.3}; LAT=${2:-0.0}; YAW=${3:-0.0}; SEED=${4:-0}
 USE_NORMAL=${USE_NORMAL:-false}
@@ -36,7 +39,7 @@ cleanup() {
   for p in "${pids[@]}"; do kill -INT "$p" 2>/dev/null; done
   sleep 1
   for p in "${pids[@]}"; do kill -9 "$p" 2>/dev/null; done
-  rm -f "$D1_FAKE_STATE" "$HOME"/marker_detection/logs/rs/simfull_*_color.png
+  rm -f "$D1_FAKE_STATE" "$HOME"/marker_detection/logs/rs/simfull_*_{color.png,depth.pgm,info.txt,root.png}
 }
 trap cleanup EXIT
 
@@ -56,7 +59,7 @@ pids+=($!)
 sleep 4
 
 python3 "$HERE/inspect_run.py" --approach marker --posture "${POSTURE:-lie}" --auto --hold 1 --name simfull \
-  --d1-run "$HERE/sim_fakes/d1_fake.py" --rs-snap "$HERE/sim_fakes/rs_snap_fake.sh" </dev/null
+  --d1-run "$HERE/sim_fakes/d1_fake.py" --rs-snap "$HERE/sim_fakes/rs_snap_fake.sh" ${INSPECT_ARGS:-} </dev/null
 rc=$?
 # 実機の記録（logs/inspect_*.log）と混ざらないよう、今回の記録を logs/sim へ移す
 last=$(ls -t "$HOME"/marker_detection/logs/inspect_*.log 2>/dev/null | head -1)
