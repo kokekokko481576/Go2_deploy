@@ -24,11 +24,11 @@ class CmdVelToSportNode(Node):
         self.declare_parameter('publish_rate', 20.0)
         self.declare_parameter('watchdog_timeout', 0.5)
         # 速度クランプ。cmd_vel_safety でもかかるが、ブリッジ単体で使う場合の保険。
-        # **下限に注意**: Go2の歩容は0.15m/s程度からしか歩き出さず、それ未満は胴体が
-        # 揺れるだけで進まない(2026-09-02実機実測)。上限をそこまで下げてはいけない。
-        self.declare_parameter('max_vx', 0.3)
+        # **下限に注意**: 前進の実用下限は0.35m/s、旋回は0.60rad/s(2026-09-23実機実測、#75)。
+        # 上限をそこまで下げてはいけない。cmd_vel_safety の上限(0.45/1.10)を切らない値にしてある。
+        self.declare_parameter('max_vx', 0.5)
         self.declare_parameter('max_vy', 0.2)
-        self.declare_parameter('max_wz', 0.5)
+        self.declare_parameter('max_wz', 1.2)
 
         publish_rate = self.get_parameter('publish_rate').value
         self._timeout = self.get_parameter('watchdog_timeout').value

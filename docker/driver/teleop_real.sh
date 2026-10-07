@@ -56,11 +56,11 @@ if ! docker ps --format '{{.Names}}' | grep -qx "$DEV_CONTAINER"; then
     fail=1
 elif ! running_in "$DEV_CONTAINER" "cmd_vel_safety/cmd_vel_safety_node"; then
     echo "[teleop] cmd_vel_safety_node が動いていない。安全フィルタ無しで走らせないこと。" >&2
-    echo "         実機で詰めた上限値(2026-09-02)で起動する:" >&2
+    echo "         実機で詰めた上限値(2026-09-23)で起動する:" >&2
     echo "         docker exec -d $DEV_CONTAINER bash -c 'source /opt/ros/humble/setup.bash; \\" >&2
     echo "           source ~/ros2_ws/install/setup.bash; \\" >&2
     echo "           exec ros2 run cmd_vel_safety cmd_vel_safety_node --ros-args \\" >&2
-    echo "             -p max_linear_x:=0.22 -p max_linear_y:=0.18 -p max_angular_z:=0.45'" >&2
+    echo "             -p max_linear_x:=0.45 -p max_linear_y:=0.18 -p max_angular_z:=1.10'" >&2
     fail=1
 fi
 
@@ -70,7 +70,7 @@ cat <<'MSG'
 [teleop] 前提OK。キーボードで走ります。
 [teleop]   - 機体が「通常モード」でないと、指令は通っても脚が出ません(胴体だけ揺れる)
 [teleop]   - 横移動(vy)はGo2ではほとんど効きません。前進(vx)と旋回(wz)で操作してください
-[teleop]   - 0.15m/s未満は歩容の下限を割るため進みません
+[teleop]   - 前進0.35m/s未満は足が出にくく、直進性も崩れます
 [teleop]   - キーを離す(何も送らない)と0.5秒でウォッチドッグが停止させます
 MSG
 

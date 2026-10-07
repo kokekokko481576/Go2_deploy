@@ -297,7 +297,7 @@ start_motion() {
     echo "[real_up]   ** Unitree Goアプリで「通常モード」にしておくこと(AIモードだと脚が出ない) **"
     start_node "$DEV" "cmd_vel_safety" "cmd_vel_safety/cmd_vel_safety_node" /tmp/safety.log \
         "$DEV_SH; exec ros2 run cmd_vel_safety cmd_vel_safety_node --ros-args \
-             -p max_linear_x:=0.22 -p max_linear_y:=0.18 -p max_angular_z:=0.45" || return 1
+             -p max_linear_x:=0.45 -p max_linear_y:=0.18 -p max_angular_z:=1.10" || return 1
     start_node "$DRIVER" "cmd_vel_to_sport" "lib/go2_sport_bridge/cmd_vel_to_sport_node" \
         /tmp/bridge.log \
         "$DRIVER_SH; exec ros2 run go2_sport_bridge cmd_vel_to_sport_node" || return 1
