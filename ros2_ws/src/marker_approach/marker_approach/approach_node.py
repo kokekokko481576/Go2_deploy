@@ -35,19 +35,6 @@ from std_msgs.msg import Bool, String
 
 from marker_approach.turn_drive_turn import Params, TurnDriveTurn
 
-
-def yaw_of_quat(q):
-    """geometry_msgs の quaternion からヨー角[rad]。"""
-    return math.atan2(2.0 * (q.w * q.z + q.x * q.y),
-                      1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-
-
-def yaw_of_array(q):
-    """unitree_go の quaternion 配列 [w, x, y, z] からヨー角[rad]。"""
-    w, x, y, z = q[0], q[1], q[2], q[3]
-    return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
-
-
 def quat_to_matrix(q):
     x, y, z, w = q.x, q.y, q.z, q.w
     n = math.sqrt(x * x + y * y + z * z + w * w)
@@ -101,10 +88,6 @@ class ApproachNode(Node):
         # False にすると「マーカーの手前（視線上の standoff 点）」を狙う。
         # 届かない配置がなくなる代わりに、法線からのずれが残ったまま止まる
         ('use_normal', 'use_normal'),
-        # 到達後の最終姿勢。'right'/'left' はマーカーを真横に入れる旋回を足す。
-        # **この旋回にはヨー角の観測が要る**（下の yaw_source）
-        ('final_heading', 'final_heading'),
-        ('side_turn_angle_deg', 'side_turn_angle'),
     ]
 
     def __init__(self):
@@ -128,25 +111,6 @@ class ApproachNode(Node):
         self.declare_parameter('lost_timeout', 0.5)
         self.declare_parameter('max_runtime', 120.0)
         self.declare_parameter('rate', 20.0)
-        # ヨー角の入手先。真横へ旋回するときだけ要る（マーカーが視野から出るため）。
-        #   none           : 使わない（final_heading='marker' のとき）
-        #   imu            : sensor_msgs/Imu（Gazebo: /robot1/imu_plugin/out）**推奨**
-        #   odometry       : nav_msgs/Odometry（Gazebo: /robot1/odometry/filtered）
-        #   sportmodestate : unitree_go/SportModeState（実機: /sportmodestate）
-        #
-        # **脚オドメトリのヨーは使わないほうがよい。** Gazeboで90度旋回させたところ、
-        # 真値では+94度回っているのにオドメトリは+86.5度としか報告せず、
-        # 8%少なく見積もった（2026-09-08実測）。開ループの旋回はヨーの出所の
-        # 誤差がそのまま最終姿勢に出る。IMUの積分のほうが滑りの影響を受けない。
-        # **開始からの差分しか使わない**ので、絶対の基準・原点は問わない。
-        self.declare_parameter('yaw_source', 'none')
-        self.declare_parameter('yaw_topic', '/odom')
-        # 推測航法の姿勢が1周期で跳ねたら、その観測を捨てる[rad]。
-        # **Gazeboの `/robot1/odometry/filtered` はヨーが約180度飛ぶことがある**
-        # （2026-09-08、真値・IMUが-86.4度のときodomだけ+93.3度）。これを使うと
-        # 真横旋回が逆方向に回る。歩容の旋回は速くても0.5rad/s程度なので、
-        # 1周期(0.05s)で30度も変わるのは観測の異常とみなしてよい。
-        self.declare_parameter('odom_jump_limit_deg', 30.0)
         # 1周期=1行のCSV（空なら書かない）。**静止判定のしきい値を実機で決めるためのもの。**
         # 静止待ち中のマーカー位置の振れと、その間に観測した法線(alpha)のずれを突き合わせる
         self.declare_parameter('trace_csv', '')
@@ -188,12 +152,6 @@ class ApproachNode(Node):
         self._abort_logged = False
         self._log_counter = 0
 
-        self.last_odom = None   # (x, y, yaw)。真横旋回の推測航法に使う
-        self.odom_jump_limit = math.radians(g('odom_jump_limit_deg'))
-        self._odom_jump_warned = False
-        self.yaw_source = g('yaw_source')
-        self._setup_yaw(self.yaw_source, g('yaw_topic'), params)
-
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel_raw', 10)
         self.state_pub = self.create_publisher(String, '~/state', 10)
         # ビード位置（base_link座標）。**アームを向けるのはこの点。**
@@ -220,58 +178,6 @@ class ApproachNode(Node):
             f'{"ゴール=法線上（正対して止まる）" if params.use_normal else "ゴール=視線上（マーカーの手前。法線ずれは残る）"}  '
             f'{"[dry_run] cmd_vel_raw は出しません" if self.dry_run else "[実走行] cmd_vel_raw を出します"}  '
             f'enable=False（~/enable に true を送るまで動きません）')
-
-    def _accept_odom(self, x, y, yaw):
-        """推測航法の観測を受ける。**跳ねた観測は捨てる**（理由はパラメータの説明）。"""
-        if self.last_odom is not None and self.last_odom[2] is not None:
-            d = abs((yaw - self.last_odom[2] + math.pi) % (2 * math.pi) - math.pi)
-            if d > self.odom_jump_limit:
-                if not self._odom_jump_warned:
-                    self._odom_jump_warned = True
-                    self.get_logger().warn(
-                        f'推測航法のヨーが1周期で {math.degrees(d):.0f}度 跳ねました。'
-                        'この観測は捨てます（真横への旋回が逆向きに回る原因になります）')
-                return
-        self.last_odom = (x, y, yaw)
-
-    def _setup_yaw(self, source, topic, params):
-        """ヨー角の購読を用意する。**真横旋回を指定したのに供給が無い設定は起動時に弾く**
-        （走ってから「回れません」で止まると、機体が中途半端な姿勢で残る）。"""
-        if source == 'none':
-            if params.final_heading != 'marker':
-                raise SystemExit(
-                    f'final_heading={params.final_heading!r} はヨー角が要ります。'
-                    'yaw_source を odometry か sportmodestate にしてください'
-                    '（90度回すとマーカーが視野から出るため、カメラでは閉じられません）')
-            return
-        if source == 'imu':
-            # **IMUは向きしか出さない。** 真横旋回では機体が引きずられて動くので、
-            # 位置が無いぶん誤差が残る（実測で方位10度ぶん）。位置の出るものを推奨
-            from sensor_msgs.msg import Imu
-            self.get_logger().warn(
-                'yaw_source=imu は位置を出しません。真横への旋回では機体が'
-                '7cm前・8cm横ほど引きずられ、その分だけ真横から外れます'
-                '（2026-09-08 Gazebo実測）。位置の出る odometry / sportmodestate を推奨')
-            self.create_subscription(
-                Imu, topic,
-                lambda m: self._accept_odom(None, None, yaw_of_quat(m.orientation)), 10)
-        elif source == 'odometry':
-            from nav_msgs.msg import Odometry
-            self.create_subscription(
-                Odometry, topic,
-                lambda m: self._accept_odom(m.pose.pose.position.x, m.pose.pose.position.y,
-                                            yaw_of_quat(m.pose.pose.orientation)), 10)
-        elif source == 'sportmodestate':
-            # unitree_go は実機環境にしか無いので、選ばれたときだけ import する
-            from unitree_go.msg import SportModeState
-            self.create_subscription(
-                SportModeState, topic,
-                lambda m: self._accept_odom(m.position[0], m.position[1],
-                                            yaw_of_array(m.imu_state.quaternion)), 10)
-        else:
-            raise SystemExit(
-                f'yaw_source={source!r} は不正。none/imu/odometry/sportmodestate')
-        self.get_logger().info(f'ヨー角の購読: {source} <- {topic}')
 
     def _now(self):
         """時刻[s]。**ROS時計を使う**（`use_sim_time:=true` なら sim の時計）。
@@ -361,15 +267,13 @@ class ApproachNode(Node):
             return
 
         now = self._now()
-        if self.started_at and now - self.started_at > self.max_runtime:
+        if self.started_at is not None and now - self.started_at > self.max_runtime:
             self.disable(f'最大実行時間 {self.max_runtime}s を超過', error=True)
             return
-        # **真横へ旋回する区間はマーカーが視野から出るのが正常**なので見失いで止めない。
-        # 判定は制御則側の marker_optional() に一本化してある（前後の静止待ちも含む）。
         # 静止待ちと正対旋回だけは final_lost_timeout まで粘る（最後に見えた方位へ回して
         # 見つけ直す）。その間は古い観測で制御則を回すので、法線(gamma)は渡さない。
         stale = self.last_pose_time is None or now - self.last_pose_time > self.lost_timeout
-        if stale and not self.ctl.marker_optional():
+        if stale:
             if self.last_pose_time is None or not self.ctl.marker_loss_tolerable():
                 self.disable(f'マーカーを {self.lost_timeout}s 見失った', error=True)
                 return
@@ -382,12 +286,11 @@ class ApproachNode(Node):
         if stale:
             gamma = None
         dist = math.hypot(m[0], m[1])
-        # 見えていない区間では観測が古い。古い値で「近づきすぎ」を判定しない
-        if not self.ctl.marker_optional() and dist < self.min_distance:
+        if dist < self.min_distance:
             self.disable(f'最小距離 {self.min_distance}m まで接近（実測 {dist:.3f}m）', error=True)
             return
 
-        cmd = self.ctl.step(now, m[0], m[1], gamma, self.last_ambiguity, self.last_odom,
+        cmd = self.ctl.step(now, m[0], m[1], gamma, self.last_ambiguity,
                             obs_time=self.last_pose_time)
         if self.trace is not None:
             # 観測単体の alpha（平均する前）。静止判定の良し悪しはこれのばらつきで見る
@@ -400,8 +303,7 @@ class ApproachNode(Node):
                 f'{self.last_ambiguity:.2f},{int(self.ctl.stationary)},'
                 f'{math.degrees(cmd.alpha):.2f},{int(cmd.alpha_trusted)},{cmd.vx:.3f},{cmd.wz:.3f}\n')
         # 古い観測のまま直進やゴールへの旋回に移ったら、指令を出す前に止める
-        if (stale and not cmd.done and not self.ctl.marker_optional()
-                and not self.ctl.marker_loss_tolerable()):
+        if stale and not cmd.done and not self.ctl.marker_loss_tolerable():
             self.disable(f'マーカーを見失ったまま {cmd.state} に移ろうとした', error=True)
             return
         self.publish(cmd.vx, cmd.wz)

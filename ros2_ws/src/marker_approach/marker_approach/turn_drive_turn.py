@@ -206,24 +206,6 @@ class Params:
     # （alpha ずれた位置から寄ると、法線上の点からは 2*standoff*sin(alpha/2) 離れて止まる）。
     # どちらでも alpha の観測と報告は行う。使うかどうかだけが違う。
     use_normal = True
-    # 到達後の最終姿勢。'marker'=マーカーを正面に見て止まる（既定・従来どおり）。
-    # 'right'=マーカーが**右真横**に来るまでその場旋回する（＝左へ90度回る）。'left'は逆。
-    # 用途: 対象物の横に着けてから、機体側面のアームで作業する。
-    # **この旋回中はマーカーは視野から出る**（視野は実機±46度、sim±31度）ので
-    # カメラでは追えない。ヨー角の観測（`step` の `yaw_obs`）を使って開ループで回す。
-    final_heading = 'marker'
-    # 真横へ回すときの目標角[rad]。**「90度」ではなく「引きずり補正込みの値」を入れる。**
-    #
-    # 四足の「その場旋回」はその場ではない。Gazeboの実測で、75度回る間に機体が
-    # 116mm動いた（90度なら約14cm）。standoff 0.65m ではこれがマーカー方位の
-    # 約9度に相当し、90度きっちり回すと真横から9度ずれて止まる。
-    # **この量は系統的**（3回で -9.4 / -9.5 / -8.5度、ばらつき1度以内）なので、
-    # 目標角から差し引けば消える。Gazeboで 81度 にしたら -0.5〜-2.9度 に収まった。
-    #
-    # 差し引く量は「引きずりの横成分 / standoff」で決まるので、**standoff を変えたら
-    # 測り直すこと**（遠いほど角度への効きは小さい）。機体が変われば当然変わる。
-    # 手順: 90度で1回走らせ、止まった姿勢の方位のずれを測り、その分を引く。
-    side_turn_angle = math.pi / 2
 
     def __init__(self, **kw):
         for k, v in kw.items():
@@ -249,9 +231,6 @@ class Params:
                        f'turn_lead_angle({math.degrees(self.turn_lead_angle):.1f}度) より小さい。'
                        '停止判定が惰性の推定値だけで決まり、推定が外れると判定に入らない。'
                        'ang_tolerance を turn_lead_angle 以上にすること')
-        if self.final_heading not in ('marker', 'right', 'left'):
-            bad.append(f"final_heading({self.final_heading!r}) が不正。"
-                       "'marker' / 'right' / 'left' のいずれかにすること")
         # マーカーを別置きスタンドにする前提の検査（2026-09-23）
         if self.standoff - self.camera_x < 0.28:
             bad.append(f'standoff({self.standoff}) - camera_x({self.camera_x}) = '
@@ -264,11 +243,6 @@ class Params:
         if abs(self.bead_forward) > 0.40:
             bad.append(f'bead_forward({self.bead_forward}) がアームの届く範囲'
                        '(-0.40〜+0.50m)の外')
-        if self.final_heading != 'marker':
-            bad.append(f"final_heading({self.final_heading!r}) が 'marker' でない。"
-                       'マーカーを別置きスタンドにする設計では、撮影位置に着いた時点で'
-                       '既にワークに対して真横を向いているので真横旋回は要らない。'
-                       '旋回するとビードがアームの届く帯から外れる')
         if self.still_window > self.settle_time + self.still_max_extra:
             bad.append(f'still_window({self.still_window}) が静止待ちの最長'
                        f'(settle_time+still_max_extra={self.settle_time + self.still_max_extra})'
@@ -309,7 +283,6 @@ class TurnDriveTurn:
     DRIVE = '直進'
     FINAL_TURN = '正対へ旋回'
     CHECK = '測り直し'
-    SIDE_TURN = '真横へ旋回'
     SETTLE = '静止待ち'
     DONE = '完了'
 
@@ -333,24 +306,9 @@ class TurnDriveTurn:
         self.abort_reason = None      # 打ち切りが決まったが、まだ正対に向き直していない
         self.alpha = 0.0
         self.alpha_trusted = False
-        self.side_turn_ref = None         # 真横旋回の開始時の (機体x, 機体y, ヨー)
-        self.side_marker_world = None     # 同時刻のマーカー位置（オドメトリ座標系）
-        self.side_turn_checks = 0         # 真横旋回の測り直し回数（静止してから確認する）
-        self.arrival = None               # 真横へ回る前の到達成績（旋回後は方位が無意味になる）
         self.done = False
         self.success = False
         self.reason = None
-
-    def marker_optional(self):
-        """いまマーカーが見えていなくてよい区間か。**見失い判定を止める側が使う**。
-
-        真横へ90度回すと、マーカーは必ず視野(実機±46度)の外に出る。この区間は
-        ヨー角だけで回しているので、見えなくても進行できるし、進行しなければならない。
-        **区間の前後に入る静止待ちも含める**（静止中も見えていない。ここを外して
-        いたせいで、静止に入った瞬間に「0.5s見失った」で落ちた）。
-        """
-        return (self.state == self.SIDE_TURN
-                or (self.state == self.SETTLE and self.next_state == self.SIDE_TURN))
 
     def marker_loss_tolerable(self):
         """マーカーを見失っても `final_lost_timeout` までは止めなくてよい区間か。
@@ -508,25 +466,13 @@ class TurnDriveTurn:
         """カメラ座標系でのマーカー方位。**視野の判定はこれで行う**（base_linkではない）。"""
         return math.atan2(my - self.p.camera_y, mx - self.p.camera_x)
 
-    def step(self, now, mx, my, gamma_obs, ambiguity, odom_obs=None, obs_time=None):
+    def step(self, now, mx, my, gamma_obs, ambiguity, obs_time=None):
         """1周期進める。
 
         `obs_time` はマーカー観測の時刻。**呼び出し側が同じ観測を周期ごとに渡し直す場合は
         必ず渡すこと**（制御周期20Hzに対しカメラは約14fps）。渡し直した古い値を
         新しい観測として積むと、位置が変わらないので「静止している」と誤判定する。
         `gamma_obs` が None の周期（見失い中）は観測として積まない。
-
-        `odom_obs` は機体の推測航法上の姿勢 `(x, y, yaw)`。**真横へ旋回するときだけ使う**
-        （その区間はマーカーが視野から出るのでカメラで閉じられない）。
-        絶対の基準は問わない（開始時からの差分しか使わない）。
-        `final_heading='marker'`（既定）なら渡さなくてよい。
-
-        **位置(x, y)も要る。** ヨーだけで回すと合わない。四足の「その場旋回」は
-        その場ではなく、実測では90度回る間に機体が7cm前・8cm横へ動いた（2026-09-08、
-        Gazebo）。マーカーまで0.58mなのでこれは方位10度に相当し、そのぶん真横から
-        外れて止まっていた。旋回は正確（自己申告+86.0度／真値+86.0度）だったのに
-        結果が合わなかった原因がこれ。位置が無い場合はヨーだけで回すが、
-        その誤差は残る。
         """
         p = self.p
         bearing, _, _ = self.goal(mx, my)
@@ -558,8 +504,8 @@ class TurnDriveTurn:
                 # 静止を確認できるまで延ばす。**マーカーが見えているときだけ**。
                 # 停止の惰性で視野から出ると確認のしようがなく、待つほど見失いの
                 # 猶予を食うだけになる（sim の斜め20度で、延ばした末に見失ったまま
-                # 次の区間へ移ろうとして落ちた）。真横旋回の前後も視野外なので延ばさない
-                if not self.still_seen and self.next_state != self.SIDE_TURN:
+                # 次の区間へ移ろうとして落ちた）。
+                if not self.still_seen:
                     if self.still_hist and now < self.settle_until + p.still_max_extra:
                         break
                     self.events.append((now, self.next_state,
@@ -588,15 +534,6 @@ class TurnDriveTurn:
                 if arrived and self.abort_reason is not None:
                     self.abort_reason = None
                 if arrived:
-                    if p.final_heading != 'marker' and self.arrival is None:
-                        # 位置は出来ている。ここから**向きだけ**を真横へ回す。
-                        # 到達成績はこの時点の値で確定させる（旋回後は方位が無意味になる）
-                        self.arrival = (pos_err, bearing, self.alpha, self.cycles + 1)
-                        self._settle(now, self.SIDE_TURN,
-                                     f'到達（位置誤差 {pos_err * 1000:.0f}mm）。'
-                                     f'マーカーを{"右" if p.final_heading == "right" else "左"}'
-                                     '真横に入れる旋回へ')
-                        continue
                     self._finish(now, True,
                                  f'到達しました（位置誤差 {pos_err * 1000:.0f}mm、'
                                  f'方位 {math.degrees(bearing):+.1f}度、'
@@ -665,77 +602,6 @@ class TurnDriveTurn:
                 vx = self.drive_dir * clamp(p.k_x * along, p.min_translation_speed, p.max_vx)
                 break
 
-            if self.state == self.SIDE_TURN:
-                # **カメラでは追えない区間**。マーカーは視野の外に出るので、
-                # ヨー角の差分だけで回す。到達判定は「回した角度」で行い、
-                # マーカーの方位は一切見ない（見えていても信用しない）。
-                if odom_obs is None or odom_obs[2] is None:
-                    self._finish(now, False,
-                                 f'final_heading={p.final_heading!r} だが推測航法の観測'
-                                 '(odom_obs)が渡されていない。真横への旋回は'
-                                 'カメラでは閉じられないので、オドメトリかIMUが要る')
-                    continue
-                ox, oy, oyaw = odom_obs
-                if self.side_turn_ref is None:
-                    self.side_turn_ref = (ox, oy, oyaw)
-                    # 見えているうちにマーカーの位置を推測航法の座標系へ移して覚える。
-                    # 以降はこれを現在の機体姿勢へ引き戻して方位を出す
-                    if ox is not None and oy is not None:
-                        c, sn = math.cos(oyaw), math.sin(oyaw)
-                        self.side_marker_world = (ox + c * mx - sn * my,
-                                                  oy + sn * mx + c * my)
-                # マーカーを右真横に置く＝マーカー方位を -90度にする
-                target_bearing = -p.side_turn_angle * (1.0 if p.final_heading == 'right'
-                                                       else -1.0)
-                if self.side_marker_world is not None and ox is not None:
-                    # **位置の変化も入れて**、いまマーカーが何度に見えるはずかを出す
-                    dx = self.side_marker_world[0] - ox
-                    dy = self.side_marker_world[1] - oy
-                    c, sn = math.cos(-oyaw), math.sin(-oyaw)
-                    bx, by = c * dx - sn * dy, sn * dx + c * dy
-                    bearing_pred = math.atan2(by, bx)
-                    remain = wrap(bearing_pred - target_bearing)
-                    turned = wrap(oyaw - self.side_turn_ref[2])
-                else:
-                    # 位置が無いのでヨーだけ。その場旋回でない分の誤差は残る
-                    turned = wrap(oyaw - self.side_turn_ref[2])
-                    remain = wrap(p.side_turn_angle
-                                  * (1.0 if p.final_heading == 'right' else -1.0) - turned)
-                # 静止して測り直した結果が許容内なら完了。**報告値は静止後の姿勢**
-                if self.side_turn_checks > 0 and abs(remain) <= p.ang_tolerance:
-                    pe, br, al, cy = self.arrival
-                    self._finish(now, True,
-                                 f'真横に構えました（旋回 {math.degrees(turned):+.1f}度、'
-                                 f'マーカーの方位 '
-                                 f'{math.degrees(target_bearing + remain):+.1f}度'
-                                 f'／目標 {math.degrees(target_bearing):+.0f}度）。'
-                                 '到達時の成績: '
-                                 f'位置誤差 {pe * 1000:.0f}mm、方位 {math.degrees(br):+.1f}度、'
-                                 f'{self._alpha_note()}{cy}周目')
-                    continue
-                # **ここは「目標角まで回す」旋回なので、惰性ぶん手前で指令を切る。**
-                # 正対旋回(FINAL_TURN)が max(許容値, 惰性) で切るのは、目標が
-                # 「マーカー方位ゼロ」でカメラが今の値を返し続けるからで、判定基準が違う。
-                # こちらは絶対角が目標なので、turn_lead_angle だけ手前で切れば惰性で乗る。
-                if abs(remain) <= p.turn_lead_angle:
-                    if self.side_turn_checks >= 3:
-                        pe, br, al, cy = self.arrival
-                        self._finish(now, True,
-                                     f'真横に構えました（旋回 {math.degrees(turned):+.1f}度、'
-                                     f'マーカーの方位 '
-                                     f'{math.degrees(target_bearing + remain):+.1f}度'
-                                     f'／目標 {math.degrees(target_bearing):+.0f}度。'
-                                     f'測り直し上限）。到達時の成績: '
-                                     f'位置誤差 {pe * 1000:.0f}mm、'
-                                     f'方位 {math.degrees(br):+.1f}度、'
-                                     f'{self._alpha_note()}{cy}周目')
-                        continue
-                    self.side_turn_checks += 1
-                    self._settle(now, self.SIDE_TURN, '静止して回した角度を測り直す')
-                    continue
-                wz = math.copysign(clamp(p.k_yaw * abs(remain), p.min_wz, p.max_wz), remain)
-                break
-
             if self.state == self.FINAL_TURN:
                 if abs(bearing) <= max(p.ang_tolerance, p.turn_lead_angle):
                     self._settle(now, self.CHECK, '正対した')
@@ -748,4 +614,4 @@ class TurnDriveTurn:
         return Command(vx, wz, self.state, pos_err, bearing, bearing_cam, goal_bearing, dist,
                        self.alpha, self.alpha_trusted, self.cycles,
                        self.done, self.success, self.reason,
-                       bead=self.bead(mx, my))
+                       bead=None if gamma_obs is None else self.bead(mx, my))

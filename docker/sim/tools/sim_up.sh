@@ -1,5 +1,5 @@
 #!/bin/bash
-# Gazebo(Go2_deploy の simコンテナ)で、マーカー接近＋真横旋回を動かす。
+# Gazebo(Go2_deploy の simコンテナ)で、マーカー接近を動かす。
 #
 # 前提: go2-sim コンテナが起動していること（compose.yaml が ros2_ws を /ros2_ws へ
 #       読み取り専用でマウントする）。**計測するなら Nav2 は切ること**:
@@ -26,14 +26,6 @@ RD() { docker exec -d "$C" bash -c ". /opt/ros/jazzy/setup.bash && $1"; }
 # decimate: 既定の 2.0 では 8cm のタグを 2.0m までしか検出できない。1.0 で 2.4m まで伸びる。
 TAG_SIZE=0.078434
 DECIMATE=1.0
-# --- ヨー角の出所 ---
-# **simでは IMU を使う。** 真横への90度旋回で機体は約14cm引きずられ、その分だけ
-# マーカーの方位が約10度変わる。制御則は位置も渡せば推測航法で補正できるが、
-# **simの `/robot1/odometry/filtered` はこの移動を観測できず(116mmに対し5mm)、
-# しかもヨーが180度飛ぶことがある**。位置を渡すと3回中2回が逆向き・無回転に
-# なった（2026-09-08実測）。IMUのヨーは真値と0.05度で一致し安定しているので、
-# **約10度の既知のずれを受け入れて、そちらを使う**（最終合わせはアーム搭載カメラの担当）。
-# 実機では /sportmodestate の位置が引きずりを捉えるかもしれない（未検証）。
 # --- 視野の予算（**実機と違う。simのカメラは水平±31度しかない**）---
 # 制御則の既定 25/33度 は実機の±46度前提。simでそのまま使うと直進中にタグが
 # 画面から切れて見失う。実測に合わせて絞る。
@@ -65,8 +57,7 @@ RD "export PYTHONPATH=/ros2_ws/src/marker_approach:\$PYTHONPATH && \
     python3 -m marker_approach.approach_node --ros-args \
     -r cmd_vel_raw:=/robot1/cmd_vel \
     -p camera_x:=0.33 -p camera_y:=0.0 -p camera_z:=0.0057 \
-    -p standoff:=0.65 -p dry_run:=false -p pos_tolerance:=0.09 \
-    -p final_heading:=right -p side_turn_angle_deg:=81.0 -p yaw_source:=imu -p yaw_topic:=/robot1/imu_plugin/out \
+    -p standoff:=0.65 -p dry_run:=false \
     -p fov_budget_deg:=$FOV_BUDGET -p drive_bearing_limit_deg:=$DRIVE_LIMIT \
     -p max_runtime:=120.0 > /tmp/approach.log 2>&1"
 sleep 5
