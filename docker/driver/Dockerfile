@@ -75,6 +75,27 @@ RUN mkdir -p /root/ws/install/unitree_ros2_example/lib/unitree_ros2_example && \
     find /root/ws/install/unitree_ros2_example -maxdepth 1 -type l -executable | \
     xargs -I{} ln -s {} /root/ws/install/unitree_ros2_example/lib/unitree_ros2_example/
 
+# --- D1-T アーム (Issue #63/#64) ---
+# D1-TはGo2のSport Mode APIとは別系統で、unitree_sdk2 のDDSチャネル層を直接使う
+# (ROS2のメッセージは介さない)。unitree_sdk2 はプリビルドの静的ライブラリと
+# 独自ビルドのCycloneDDSを /usr/local へコピーするだけなので、BUILD_EXAMPLES=OFF に
+# すればビルド自体は軽い。
+COPY external/unitree_sdk2 /root/unitree_sdk2
+RUN cmake -S /root/unitree_sdk2 -B /root/unitree_sdk2/build \
+        -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release && \
+    cmake --install /root/unitree_sdk2/build && \
+    rm -rf /root/unitree_sdk2/build
+
+# **ldconfig は実行しない。**
+# unitree_sdk2 が /usr/local/lib に入れる libddsc/libddscxx は、ROS2 Humble が使う
+# CycloneDDS(/opt/ros/humble/lib)とABIが違う。ld.so のキャッシュに載せてしまうと
+# ROS2側のノードがこちらを掴んで "free(): invalid pointer" で落ちる。
+# D1のサンプルだけが /usr/local/lib を見れば良いので、実行時の解決は
+# d1_sdk/run.sh の LD_LIBRARY_PATH に任せる(リンク時は ld の既定探索パスで足りる)。
+COPY docker/driver/d1_sdk /root/d1_sdk
+RUN cmake -S /root/d1_sdk -B /root/d1_sdk/build -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build /root/d1_sdk/build -j"$(nproc)"
+
 COPY docker/driver/setup_dds.sh /setup_dds.sh
 COPY docker/driver/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
