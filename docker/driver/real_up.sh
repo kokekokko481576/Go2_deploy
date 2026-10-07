@@ -113,7 +113,16 @@ cmd_status() {
 
 cmd_down() {
     local entry container label pattern pids
-    # 指令源(走行系)を先に落とす。estop.sh と同じ順序。
+    # 走行系は estop.sh で先に止める。ブリッジを kill -9 で落とすだけでは
+    # 停止指令が出ず、機体が最後の指令のまま歩き続ける恐れがある。
+    # estop.sh はブリッジを落としてから停止指令を直接送る。
+    if container_up "$DRIVER"; then
+        log "走行系を停止(estop.sh)"
+        docker exec "$DRIVER" bash -c "$DRIVER_SH; ros2 run go2_sport_bridge estop.sh" \
+            || echo "[real_up] 停止指令が機体に届いたか確認できなかった。リモコンで止めること" >&2
+    else
+        echo "[real_up] $DRIVER が起動していないので停止指令を送れない。機体が動いていればリモコンで止めること" >&2
+    fi
     for entry in "${PROCS[@]}"; do
         IFS='|' read -r container label pattern <<< "$entry"
         container_up "$container" || continue
