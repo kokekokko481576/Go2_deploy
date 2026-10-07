@@ -16,7 +16,13 @@
 set -u
 
 echo "[estop] cmd_vel→Moveブリッジを停止します"
-pkill -9 -f "lib/go2_sport_bridge/cmd_vel_to_sport_node" 2>/dev/null
+# 照合文字列は real_up.sh(PROCS) と teleop_real.sh(running_in) にもある。
+# リネームで1箇所だけずれると黙って0件になるので、0件のときは必ず表示する
+if pkill -9 -f "lib/go2_sport_bridge/cmd_vel_to_sport_node" 2>/dev/null; then
+    echo "[estop] ブリッジを停止した"
+else
+    echo "[estop] 停止するブリッジが見つからなかった(起動していないか、照合文字列がずれている)" >&2
+fi
 
 # ROSのsetupは未定義変数を参照するので set -u を掛けたまま source しない
 set +u
@@ -25,20 +31,13 @@ if [ -z "${ROS_DISTRO:-}" ] && [ -f /setup_dds.sh ]; then
 fi
 set -u
 
-echo "[estop] 停止指令を送ります（ゼロ速度 + StopMove を3秒間）"
-# `-w 0` は必須。`ros2 topic pub --once` は既定で購読者が1つ現れるまで待つため、
-# 機体が繋がっていない/DDSが見えていない状況では**ここで無限に止まる**。
-# 非常停止が黙ってハングするのは最悪なので、待たずに送って3秒間繰り返す
-# (繰り返すことで、DDSのマッチング直後に落ちた1通目も取り返せる)。
-END=$((SECONDS+3))
-while [ $SECONDS -lt $END ]; do
-  # ゼロ速度のMove(api_id=1008)。idは毎回変える(同一idの重複指令は機体に無視される)
-  ros2 topic pub --once -w 0 /api/sport/request unitree_api/msg/Request \
-    "{header: {identity: {id: ${RANDOM}${RANDOM}, api_id: 1008}}, parameter: '{\"x\":0.0,\"y\":0.0,\"z\":0.0}'}" \
-    > /dev/null 2>&1
-  # StopMove(api_id=1003)
-  ros2 topic pub --once -w 0 /api/sport/request unitree_api/msg/Request \
-    "{header: {identity: {id: ${RANDOM}${RANDOM}, api_id: 1003}}}" > /dev/null 2>&1
-done
+echo "[estop] 停止指令を送ります（ゼロ速度Move を20Hz・StopMove を1秒ごと、機体が見えてから3秒間）"
+# `ros2 topic pub --once` を繰り返す形にしない。publisher がDDSのマッチング前に
+# 破棄されるとメッセージはどこにも届かない(実LANのマッチングは数百ms〜秒かかる)。
+# estop_send_node は1プロセスでpublisherを生かしたまま送り続け、
+# 機体が見えないままでも6秒で打ち切る(黙ってハングしない)。
+ros2 run go2_sport_bridge estop_send_node
+rc=$?
 echo "[estop] 完了。機体が止まっていることを目視で確認してください。"
 echo "[estop] 止まらない場合は Unitree のリモコンで停止してください。"
+exit $rc
