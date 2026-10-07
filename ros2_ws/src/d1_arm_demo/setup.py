@@ -16,6 +16,7 @@ setup(
     maintainer_email='riku062214riku@gmail.com',
     description='到達通知を受けてD1アームを決め打ち角度へ動かす',
     license='MIT',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'arm_demo_node = d1_arm_demo.arm_demo_node:main',

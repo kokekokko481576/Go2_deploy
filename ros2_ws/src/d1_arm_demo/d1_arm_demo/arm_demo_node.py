@@ -5,6 +5,11 @@
 `goal_reached`(`std_msgs/Bool`) に True が来たら、`waypoints` で与えた関節角へ
 `step_interval` 秒おきに1つずつ指令を出す。終わったら `arm_done` に True を出す。
 
+**`arm_done` は「指令を送り終えた」通知であって「アームが着いた」ではない。**
+このノードはフィードバックを購読していない(実機のフィードバックは `rt/` なしの
+トピックで ROS2 からは購読できない。d1_arm_bridge の README 参照)。到達を確かめたい
+下流は、`d1_sdk/run.sh get_arm_joint_angle` で実角度を読むこと。
+
 トリガ源は問わない設計にしてある:
 
 - Nav2 の `NavigateToPose` が成功したとき（#66、`goal_pose_bridge.py` が出す）
@@ -30,9 +35,13 @@
 `position_proportional_gain` がロボット全体で共通の1値であることが根にありそうだが、
 **原因は未特定**（脚の歩行にも効く共通パラメータなので深追いは保留）。
 
-したがって `waypoints` は「1行＝1つの中間姿勢」で書き、**隣り合う行の差分は
-1関節だけにしておくこと**。既定値もそうしてある。実機側（#64）も
-「30秒に1回の離散コマンド」方針なので、この作りはそのまま実機に持っていける。
+したがって **送る指令はどれも、1つ前の指令から1関節しか変わらないようにしてある**
+(`plan.py`)。ウェイポイントの間・開始姿勢への移動・中立復帰のすべてが対象で、
+中立へは来た道を逆にたどって戻る。2関節以上変わるウェイポイントを渡すと、
+起動時に警告したうえで1関節ずつに分けて送る。
+
+起動時のアームは中立姿勢にあるものとみなす(走行中は中立に固定する前提。README参照)。
+実機側（#64）も「30秒に1回の離散コマンド」方針なので、この作りはそのまま実機に持っていける。
 
 ## 使い方
 
@@ -41,19 +50,26 @@
       -r arm_command:=/robot1/d1_arm_controller/commands \
       -p step_interval:=4.0
 
-実機では `step_interval` を 30.0 程度にする（`docs/計画/アーム動作.md` §4-3、
-連続コマンドで数分後に無応答化するという他ラボの報告への対策）。
+`step_interval` の既定は実機向けの 30.0（`docs/計画/アーム動作.md` §4-3、
+連続コマンドで数分後に無応答化するという他ラボの報告への対策）。**実機では
+d1_arm_bridge の `min_command_interval` 以上にすること。** sim では上のように短くしてよい。
 """
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from std_msgs.msg import Bool, Float64MultiArray
+
+from d1_arm_demo.plan import build_plan, changed_joints, multi_joint_rows
 
 # 関節の並び。`go2_description/config/ros_control.yaml` の d1_arm_controller の
 # `joints:` と同じ順序でなければならない。
 JOINT_NAMES = ('d1_joint1', 'd1_joint2', 'd1_joint3', 'd1_joint4',
                'd1_joint5', 'd1_joint6', 'd1_joint_l', 'd1_joint_r')
 N_JOINTS = len(JOINT_NAMES)
+NEUTRAL = [0.0] * N_JOINTS
+DEFAULT_STEP_INTERVAL = 30.0
 
 # 既定のウェイポイント。**動かすのは j1 と j2 の2軸だけ**（#64 の方針。残り4軸と
 # グリッパーは中立に固定する）。**隣の行との差分は1関節だけ**（docstring 参照）。
@@ -89,21 +105,39 @@ class ArmDemoNode(Node):
     def __init__(self):
         super().__init__('d1_arm_demo_node')
 
-        self.declare_parameter('step_interval', 4.0)
+        self.declare_parameter('step_interval', DEFAULT_STEP_INTERVAL)
         self.declare_parameter('return_to_neutral', True)
-        self.declare_parameter('waypoints', [])
+        # 型を明示する。既定値を空リストにすると BYTE_ARRAY と推論され、
+        # double 配列を渡すと起動時に InvalidParameterTypeException で落ちる
+        self.declare_parameter('waypoints', Parameter.Type.DOUBLE_ARRAY)
 
         self.step_interval = float(self.get_parameter('step_interval').value)
+        if self.step_interval <= 0.0:
+            # 負だと最初の到達通知の瞬間に create_timer が例外で落ち、0だと全力で撃ち続ける
+            self.get_logger().error(
+                f'step_interval={self.step_interval} は正でなければなりません。'
+                f'既定の {DEFAULT_STEP_INTERVAL}s を使います')
+            self.step_interval = DEFAULT_STEP_INTERVAL
         self.return_to_neutral = bool(self.get_parameter('return_to_neutral').value)
         self.waypoints = self._load_waypoints()
+        for i in multi_joint_rows(self.waypoints):
+            names = ', '.join(JOINT_NAMES[j].replace('d1_', '')
+                              for j in changed_joints(self.waypoints[i - 1], self.waypoints[i]))
+            self.get_logger().warn(
+                f'ウェイポイント{i + 1}行目は前の行から複数の関節が変わります（{names}）。'
+                'Gazeboでは多関節同時指令で j1 が可動域上限へ走るため、1関節ずつに分けて送ります。'
+                '動かす順序を決めたい場合は1関節ずつの行に書き直してください')
 
         self.cmd_pub = self.create_publisher(Float64MultiArray, 'arm_command', 10)
         self.done_pub = self.create_publisher(Bool, 'arm_done', 10)
         self.create_subscription(Bool, 'goal_reached', self.on_goal_reached, 10)
 
         self.running = False
+        self.plan = []
         self.index = 0
         self.timer = None
+        # 最後に送った姿勢。起動時は中立とみなす
+        self.current = list(NEUTRAL)
 
         self.get_logger().info(
             f'アームデモ 準備完了 ウェイポイント{len(self.waypoints)}点 '
@@ -117,7 +151,9 @@ class ArmDemoNode(Node):
         ROS2のパラメータは入れ子の配列を取れないので、`[0.0, 0.0, ... ]` を
         N_JOINTS の倍数の長さで渡してもらう形にしている。
         """
-        raw = self.get_parameter('waypoints').value
+        # 型だけ宣言した未指定のパラメータは、Humble では get_parameter が
+        # ParameterUninitializedException を投げるので get_parameter_or で読む
+        raw = self.get_parameter_or('waypoints', None).value
         if not raw:
             return [list(w) for w in DEFAULT_WAYPOINTS]
         raw = [float(x) for x in raw]
@@ -138,49 +174,37 @@ class ArmDemoNode(Node):
             return
         self.get_logger().info('到達通知を受けました。アームを動かします')
         self.running = True
+        self.plan = build_plan(self.current, self.waypoints, self.return_to_neutral, NEUTRAL)
         self.index = 0
+        self.get_logger().info(f'{len(self.plan)}回に分けて送ります（{self.step_interval}sおき）')
         # 最初の1点はすぐ出す。残りは step_interval おき
         self._send_next()
         self.timer = self.create_timer(self.step_interval, self._send_next)
 
     def _send_next(self):
-        if self.index >= len(self.waypoints):
+        if self.index >= len(self.plan):
             self._finish()
             return
-        wp = self.waypoints[self.index]
+        wp = self.plan[self.index]
+        changed = ', '.join(JOINT_NAMES[j].replace('d1_', '')
+                            for j in changed_joints(self.current, wp))
         self.cmd_pub.publish(Float64MultiArray(data=wp))
-        changed = self._changed_joints(self.index)
+        self.current = list(wp)
         self.get_logger().info(
-            f'[{self.index + 1}/{len(self.waypoints)}] '
+            f'[{self.index + 1}/{len(self.plan)}] '
             + ' '.join(f'{n.replace("d1_", "")}={v:+.3f}' for n, v in zip(JOINT_NAMES, wp))
-            + (f'  （変化: {changed}）' if changed else '  （変化なし）'))
+            + f'  （変化: {changed}）')
         self.index += 1
-
-    def _changed_joints(self, i):
-        """1つ前のウェイポイントから変わった関節の名前。**2つ以上あれば警告する。**"""
-        if i == 0:
-            return ''
-        prev, cur = self.waypoints[i - 1], self.waypoints[i]
-        names = [n.replace('d1_', '') for n, a, b in zip(JOINT_NAMES, prev, cur)
-                 if abs(a - b) > 1e-9]
-        if len(names) > 1:
-            self.get_logger().warn(
-                f'このウェイポイントで {len(names)} 関節が同時に動きます（{", ".join(names)}）。'
-                'Gazeboでは多関節同時指令で j1 が可動域上限へ走る症状が出ています。'
-                '1関節ずつに分けてください')
-        return ', '.join(names)
 
     def _finish(self):
         if self.timer is not None:
             self.timer.cancel()
             self.destroy_timer(self.timer)
             self.timer = None
-        if self.return_to_neutral:
-            self.cmd_pub.publish(Float64MultiArray(data=[0.0] * N_JOINTS))
-            self.get_logger().info('中立姿勢へ戻しました')
         self.running = False
+        # 送信完了の通知(到達の確認ではない。docstring 参照)
         self.done_pub.publish(Bool(data=True))
-        self.get_logger().info('アーム動作を完了しました')
+        self.get_logger().info('アームへの指令を送り終えました（到達は確認していません）')
 
 
 def main():
@@ -188,11 +212,13 @@ def main():
     node = ArmDemoNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        # SIGTERM では rclpy が先にコンテキストを畳むので、二重に shutdown しない
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
