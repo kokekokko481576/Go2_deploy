@@ -148,11 +148,21 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        # 停止指令を出し終えるまで割り込みを受け付けない。止まらないように見えて
+        # Ctrl-Cを連打すると、2回目のKeyboardInterruptでここを抜けて停止指令が届かない。
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         # shutdown前に停止指令を出す。これを送らないと、最後の指令のまま歩き続ける恐れがある。
         # publish直後にプロセスが終わると送信が完了しないことがあるので少し待つ。
         if rclpy.ok():
             node.stop_move()
             time.sleep(0.2)
+        else:
+            # rclpyのシグナルハンドラを外しているので、このプロセス内でshutdownを
+            # 呼ぶ箇所は無い。それでもここに来た場合はpublisherが無効で停止指令を送れない
+            node.get_logger().error(
+                'rclpyが先に終了していたため停止指令を送れなかった。'
+                'estop.sh を実行するかリモコンで止めること')
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
