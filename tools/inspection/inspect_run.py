@@ -377,12 +377,19 @@ class Runner:
         def move(q):
             self.check_temp('撮影位置の補正の前')
             self.confirm(f'撮影位置を補正します: {q}')
-            self.arm_to(q, '撮影位置の補正')
+            # 動かし始める前に進めておく。途中で Abort しても、収納は
+            # 干渉確認済みの corr_path[-2] から始まる（deploy の cur_index と同じ形）
             self.corr_path.append(list(q))
+            self.arm_to(q, '撮影位置の補正')
 
-        q, ok = aim_correct.correct_loop(take, move, list(ref), list(ref), dist=self.a.aim_dist,
-                                         lying=lying, max_iter=self.a.aim_iter,
-                                         single=self.a.aim_single_joint, log=self.say)
+        try:
+            q, ok = aim_correct.correct_loop(take, move, list(ref), list(ref), dist=self.a.aim_dist,
+                                             lying=lying, max_iter=self.a.aim_iter,
+                                             single=self.a.aim_single_joint, log=self.say)
+        except Abort:
+            raise
+        except Exception as e:
+            raise Abort(f'撮影位置の補正に失敗: {e}') from e
         return q
 
     def check_arm_start(self):
@@ -556,6 +563,13 @@ class Runner:
     # ---- 本体 ----
     def run(self):
         a = self.a
+        if a.aim_correct and not a.dry_run:
+            # アームを出す前に失敗させる（scipy が無い実機PCだと、展開後の import で初めて落ちていた）
+            try:
+                import aim_correct  # noqa: F401
+            except Exception as e:
+                self.say(f'[停止] --aim-correct の読み込みに失敗: {e}')
+                return 1
         post = self.poses['postures'][a.posture]
         seq = post['deploy']
         if a.fast_path:
