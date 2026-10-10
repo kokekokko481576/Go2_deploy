@@ -39,6 +39,10 @@ from arm_reach_study import ry, rz
 # 実機で系統的にずれるなら、ここを合わせるとくり返しの回数が減る（合っていなくても収束はする）
 CAM_PITCH_DEG = 0.0
 
+# solve_aim が動かす関節(angle0,1,2,4)の範囲[度]。bracket で振った先がここを超える指令を
+# 送らないよう、inspect_run.py 側のチェックにも使う（inspect_run.py:bracket の angle4 範囲外の件）
+AIM_JOINT_LIMITS = {0: (-135.0, 135.0), 1: (-90.0, 90.0), 2: (-90.0, 90.0), 4: (-90.0, 90.0)}
+
 
 # ---------------------------------------------------------------- 読み込み
 def load_snap(prefix):
@@ -215,7 +219,7 @@ def solve_aim(q6, target, dist, ref_look, max_change_deg=30.0, pitch_deg=None):
                 + 2000 * ms.penetration(pose(x)) ** 2
                 + 1e-4 * float(np.sum((x - x0) ** 2)))
 
-    lim = [(-135, 135), (-90, 90), (-90, 90), (-90, 90)]
+    lim = [AIM_JOINT_LIMITS[i] for i in (0, 1, 2, 4)]
     bounds = [(max(lo, v - max_change_deg), min(hi, v + max_change_deg)) for v, (lo, hi) in zip(x0, lim)]
     r = minimize(cost, x0, bounds=bounds, method='L-BFGS-B')
     return [round(float(v), 1) for v in pose(r.x)]

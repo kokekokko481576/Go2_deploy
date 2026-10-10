@@ -7,7 +7,7 @@
                                                  D1_FAKE_DROP=N で最初のN回の set を捨てる(届かない再現)
 
 状態は D1_FAKE_STATE（既定 ~/marker_detection/logs/sim/d1_fake_state.json）に置く。
-初期値は収納姿勢（inspect_poses.json の stow ＋ グリッパ 13.2）。
+初期値は収納姿勢（inspect_poses.json の stow ＋ グリッパ -12.6。10/1 D405 交換後の値、旧 D435i は 13.2）。
 """
 import json
 import os

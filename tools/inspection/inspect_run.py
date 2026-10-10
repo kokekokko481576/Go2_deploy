@@ -41,6 +41,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -71,15 +72,19 @@ class ArmLink:
     常駐させれば、角度は届いたそばから読める。sim では d1_fake.py arm_server が同じ行を話す。
     """
 
-    def __init__(self, cmd, log):
+    def __init__(self, cmd, log, min_send_interval=0.0):
         self.log = log
         self.lock = threading.Lock()
         self.angles = None       # 最新の angle0〜6
         self.stamp = 0.0         # それを受け取った時刻（time.time()）
         self.ready = threading.Event()
+        self.min_send_interval = min_send_interval
+        self.last_send_t = 0.0
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL, text=True, bufsize=1)
+                                     stderr=subprocess.PIPE, text=True, bufsize=1,
+                                     start_new_session=True)  # run.sh がexecしない作りでも、閉じるときに子プロセスごと殺せるように
         threading.Thread(target=self._read, daemon=True).start()
+        threading.Thread(target=self._read_stderr, daemon=True).start()
         if not self.ready.wait(10.0):
             self.close()
             raise Abort(f'アームの常駐プロセスが起動しない: {" ".join(cmd)}')
@@ -98,6 +103,11 @@ class ArmLink:
             elif parts[0] in ('E', 'F'):
                 self.log(f'    [arm_server] {line.strip()}')
 
+    def _read_stderr(self):
+        # stdout と違ってここは行の形式を決めていない（起動失敗時のトレースバック等）。そのまま出す
+        for line in self.proc.stderr:
+            self.log(f'    [arm_server stderr] {line.rstrip()}')
+
     def latest(self, timeout=3.0, max_age=1.5):
         """(角度, 受け取った時刻) を返す。max_age 秒以内に届いたものが timeout 秒待っても無ければ Abort。
 
@@ -115,19 +125,39 @@ class ArmLink:
             time.sleep(0.05)
 
     def send(self, pose7):
+        # D1は連続コマンドを低間隔で送り続けると数分後に無応答化するという他ラボ報告がある
+        # （#77 d1_arm_bridge の min_command_interval、既定25秒）。ここは既定0（従来どおり）だが、
+        # 実機で確かめるまでは --min-send-interval で下限を置けるようにしてある
+        wait = self.min_send_interval - (time.time() - self.last_send_t)
+        if wait > 0:
+            time.sleep(wait)
         try:
             self.proc.stdin.write('set ' + ' '.join(f'{v:g}' for v in pose7) + '\n')
             self.proc.stdin.flush()
         except (BrokenPipeError, OSError) as e:
             raise Abort(f'アームの常駐プロセスへ送れない: {e}')
+        finally:
+            self.last_send_t = time.time()
 
     def close(self):
         try:
             self.proc.stdin.write('quit\n')
             self.proc.stdin.flush()
             self.proc.wait(2.0)
+            return
+        except Exception:
+            pass
+        # quit が効かない・プロセスが残っている。プロセスグループ全体へ送って子プロセスも殺す
+        try:
+            os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         except Exception:
             self.proc.kill()
+        try:
+            self.proc.wait(2.0)
+        except Exception:
+            self.log('    [arm_server] 終了を確認できない（PID残留の可能性）')
 
 
 class Robot:
@@ -385,7 +415,7 @@ class Runner:
         try:
             q, ok = aim_correct.correct_loop(take, move, list(ref), list(ref), dist=self.a.aim_dist,
                                              lying=lying, max_iter=self.a.aim_iter,
-                                             single=self.a.aim_single_joint, log=self.say)
+                                             single=not self.a.aim_multi_joint, log=self.say)
         except Abort:
             raise
         except Exception as e:
@@ -405,7 +435,8 @@ class Runner:
         if err <= 5.0 and max(abs(now[i]) for i in (3, 4, 5)) <= 3.0:
             return
         # 肩と肘が収納のままなら、根元の旋回と手首だけの小さな動きで収納姿勢に合わせられる。
-        # 転倒・電源の入れ直しのあと angle0 が 76.2（収納 68.7）になっていた（2026-09-28）
+        # 転倒・電源の入れ直しのあと angle0 が、当時の収納68.7からずれて76.2になっていた
+        # （2026-09-28。収納のangle0は10/7に0へ変更済みで、stow は常に poses['stow'] を見る）
         shoulder_elbow = max(abs(now[i] - stow[i]) for i in (1, 2))
         if shoulder_elbow > 5.0:
             raise Abort('アームが収納姿勢にない（肩・肘のずれ '
@@ -585,7 +616,7 @@ class Runner:
             self.say(f'  [注意] {a.posture} の姿勢は**仮**です: {post.get("_説明", "")}')
         try:
             if not a.dry_run and a.arm_io == 'server':
-                self.arm = ArmLink([str(D1), 'arm_server'], self.say)
+                self.arm = ArmLink([str(D1), 'arm_server'], self.say, min_send_interval=a.min_send_interval)
             # 0. 開始前の確認
             self.check_temp('開始前')
             self.check_arm_start()
@@ -637,12 +668,22 @@ class Runner:
             bracket = post.get('bracket') if not a.no_bracket else None
             if bracket:
                 j = bracket['joint']
+                # aim_correct が基準姿勢を関節の範囲ぎわまで動かしていると、ここで振った先が
+                # 範囲外になりうる（hold[j]=-90 のとき -102.5 等。干渉チェックは範囲を見ない）
+                joint_lim = None
+                if a.aim_correct:
+                    import aim_correct as _aim_correct
+                    joint_lim = _aim_correct.AIM_JOINT_LIMITS.get(j)
                 self.confirm(f'撮影します（angle{j} を基準から {[round(v - seq[-1][j], 1) for v in bracket["angles"]]} 度振って'
                              f'{len(bracket["angles"])}枚）')
                 for k, ang in enumerate(bracket['angles']):
                     self.check_temp(f'撮影 {k + 1}/{len(bracket["angles"])} の前')
                     p = list(hold)
                     p[j] = round(hold[j] + (ang - seq[-1][j]), 1)   # 振り幅は基準姿勢からの差で保つ
+                    if joint_lim is not None and not (joint_lim[0] <= p[j] <= joint_lim[1]):
+                        self.say(f'  撮影 {k + 1}: 補正後の姿勢から angle{j}={p[j]:g} へ振ると範囲外'
+                                 f'({joint_lim[0]:g}〜{joint_lim[1]:g})なので撮らない')
+                        continue
                     if a.aim_correct and not self._line_safe(hold, p, a.posture == 'lie'):
                         self.say(f'  撮影 {k + 1}: 補正後の姿勢から angle{j}={p[j]:g} へ振るとモデル上で干渉するので撮らない')
                         continue
@@ -677,6 +718,9 @@ class Runner:
             if self.robot is not None:
                 self.robot.enable_approach(False)
             if self.cur_index:
+                # --auto でもここは必ず人に聞く（意図的）。Abort は撮影失敗から温度超過・常駐プロセス
+                # 終了まで理由が一本道に集まるため、コードだけでは「アームは正常」と判断できない。
+                # 収納は物理的な動きなので、どの Abort でも人の確認を挟む
                 try:
                     ans = input('\nアームをこの位置から収納しますか？ y で収納 / それ以外で終了: ')
                 except EOFError:
@@ -724,12 +768,17 @@ def main():
                     help='server=arm_server を常駐させる（既定、速い）/ cli=従来どおり段ごとに set_joints と get_arm_joint_angle を起動する')
     ap.add_argument('--resend-after', type=float, default=2.0,
                     help='送ってからこの秒数たってもアームが動き出さなければ再送する（--arm-io server のみ）')
+    ap.add_argument('--min-send-interval', type=float, default=0.0,
+                    help='アームへの連続送信にこの秒数の下限を置く（--arm-io server のみ、既定0=下限なし）。'
+                         'D1は低間隔の連続コマンドで数分後に無応答化するという他ラボ報告がある'
+                         '（#77 d1_arm_bridge の min_command_interval、既定25秒）。実機で確かめるまでの逃げ道')
     ap.add_argument('--aim-correct', action='store_true',
                     help='撮影の前に深度で隅肉の根元を見つけ、アームの姿勢を直す（aim_correct.py。実機未試験）')
     ap.add_argument('--aim-dist', type=float, default=0.22, help='補正で合わせるカメラ→根元の距離[m]')
     ap.add_argument('--aim-iter', type=int, default=2, help='補正の最大回数')
-    ap.add_argument('--aim-single-joint', action='store_true',
-                    help='補正の動きを必ず1関節ずつにする（実機の多関節同時指令を確かめるまで）')
+    ap.add_argument('--aim-multi-joint', action='store_true',
+                    help='補正の動きを複数関節同時指令で送る（既定は1関節ずつ。実機の多関節同時指令を'
+                         '確かめるまでは使わないこと）')
     ap.add_argument('--fast-path', action='store_true',
                     help='姿勢の deploy_fast（複数の関節を1回で動かす経路）を使う。**実機の多関節同時指令は未試験**')
     ap.add_argument('--approach-timeout', type=float, default=120.0)
