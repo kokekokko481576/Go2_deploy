@@ -356,14 +356,20 @@ class Runner:
         """常駐プロセス経由で送り、到達を0.1秒ごとに確かめる。
 
         到達 = 6軸すべてが許容内で、直前の読みからほぼ動いていない（通過中を到達と取らない）。
-        送ってから resend_after 秒たっても**どの関節もほとんど動いていない**ときは、
-        指令が届かなかったとみなしてすぐ再送する（以前は arm_timeout の半分=5秒待ってから再送していた）。
+        送ってから resend_after 秒たっても**ずれ（最大ずれ err）が縮まっていない**ときは、
+        指令が届かなかった/一部の関節だけ止まっているとみなして再送する。resend_after 間隔で
+        最大 max_resends 回繰り返す。**2026-10-14: 当初は「全関節がほぼ動いていないか」で
+        判定していたが、他の関節は届いて1関節だけ目標に届かない実機の例（再送0回のまま
+        18秒タイムアウト）で見落としが判明したため、「err が縮まっているか」に直した**
+        （一部の関節が動いて他が止まっていても、全体の err は縮まりきらないので拾える）。
         """
         start, prev_stamp = self.arm.latest()
         self.arm.send(pose7)
         t0 = time.time()
-        resent = False
+        resend_count = 0
         prev = start
+        best_err = max(abs(start[i] - pose7[i]) for i in range(6))
+        best_err_time = t0
         while True:
             time.sleep(0.1)
             now, stamp = self.arm.latest()
@@ -374,16 +380,21 @@ class Runner:
                 prev, prev_stamp = now, stamp
             elapsed = time.time() - t0
             if err <= self.tol and fresh and step <= 0.5:
-                self.say(f'    到達（最大ずれ {err:.1f}度、{elapsed:.1f}秒）')
+                self.say(f'    到達（最大ずれ {err:.1f}度、{elapsed:.1f}秒、再送{resend_count}回）')
                 return
-            moved = max(abs(now[i] - start[i]) for i in range(6))
-            if not resent and elapsed > self.a.resend_after and moved < 1.0:
-                self.say(f'    {elapsed:.1f}秒たっても動き出さない（最大ずれ {err:.1f}度）。再送します')
+            if err < best_err - 0.5:        # 縮まったら基準を更新（ノイズ0.5度は無視）
+                best_err = err
+                best_err_time = time.time()
+            since_improve = time.time() - best_err_time
+            if since_improve > self.a.resend_after and resend_count < self.a.max_resends:
+                resend_count += 1
+                self.say(f'    {elapsed:.1f}秒ずれが縮まらない（最大ずれ {err:.1f}度）。'
+                         f'再送します（{resend_count}/{self.a.max_resends}）')
                 self.arm.send(pose7)
-                resent = True
+                best_err_time = time.time()
             if elapsed > self.a.arm_timeout:
                 raise Abort(f'アームが指令に届かない（最大ずれ {err:.1f}度、実測 '
-                            f'{" ".join(f"{v:.1f}" for v in now[:6])}）')
+                            f'{" ".join(f"{v:.1f}" for v in now[:6])}、再送{resend_count}回）')
 
     def _line_safe(self, p, q, lying):
         import aim_pose
@@ -665,8 +676,32 @@ class Runner:
             hold = list(seq[-1])
             if a.aim_correct:
                 hold = self.aim_correct(seq[-1], name, a.posture == 'lie')
-            bracket = post.get('bracket') if not a.no_bracket else None
-            if bracket:
+            sweep = post.get('sweep') if a.sweep else None
+            bracket = post.get('bracket') if not a.no_bracket and not sweep else None
+            if sweep:
+                dxs, sweep_poses = sweep['dx'], sweep['poses']
+                self.confirm(f'横一線撮影します（{len(sweep_poses)}点、ビード方向に{dxs}）')
+                prev = hold
+                for k, (dx, p) in enumerate(zip(dxs, sweep_poses), 1):
+                    self.check_temp(f'横一線 {k}/{len(sweep_poses)} の前')
+                    if not self._line_safe(prev, p, a.posture == 'lie'):
+                        self.say(f'  横一線 {k}: いまの姿勢からモデル上で干渉するので撮らない（dx={dx:+.3f}）')
+                        continue
+                    self.bracket_dirty = True
+                    self.arm_to(p, f'横一線 {k}/{len(sweep_poses)}（dx={dx:+.3f}）')
+                    shot = p
+                    if a.aim_correct:
+                        shot = self.aim_correct(p, f'{name}_sweep{k}', a.posture == 'lie')
+                    self.snap(f'{name}_sweep{k}_dx{dx:+.3f}')
+                    prev = shot
+                # 基準の姿勢へ戻してから収納へ。corr_path は点ごとの aim_correct 呼び出しで
+                # 使い切った後も残る（最後に呼んだ点のぶんが残る）ので、ここで必ず空にする。
+                # 空にしないと stow() が「まだ補正の途中」と誤認し、最後のスイープ点の
+                # 補正前の姿勢へ未確認のまま戻ってしまう（2026-10-09 sim で発覚）
+                self.arm_to(hold, '撮影の基準姿勢へ戻す')
+                self.bracket_dirty = False
+                self.corr_path = []
+            elif bracket:
                 j = bracket['joint']
                 # aim_correct が基準姿勢を関節の範囲ぎわまで動かしていると、ここで振った先が
                 # 範囲外になりうる（hold[j]=-90 のとき -102.5 等。干渉チェックは範囲を見ない）
@@ -763,7 +798,9 @@ def main():
     ap.add_argument('--hip-alarm', type=int, default=65,
                     help='後脚股関節がこの温度[℃]以上なら止める（仮。転倒時は70〜71℃）')
     ap.add_argument('--tolerance', type=float, default=None, help='アーム到達の許容[度]')
-    ap.add_argument('--arm-timeout', type=float, default=10.0)
+    ap.add_argument('--arm-timeout', type=float, default=18.0,
+                    help='これだけ待っても届かなければ諦める。2026-10-14: max-resends を複数回に増やしたため、'
+                         'resend-after*(max-resends+1)+余裕が入るよう既定を10.0→18.0に延ばした')
     ap.add_argument('--arm-io', choices=['server', 'cli'], default='server',
                     help='server=arm_server を常駐させる（既定、速い）/ cli=従来どおり段ごとに set_joints と get_arm_joint_angle を起動する')
     ap.add_argument('--resend-after', type=float, default=2.0,
@@ -772,6 +809,8 @@ def main():
                     help='アームへの連続送信にこの秒数の下限を置く（--arm-io server のみ、既定0=下限なし）。'
                          'D1は低間隔の連続コマンドで数分後に無応答化するという他ラボ報告がある'
                          '（#77 d1_arm_bridge の min_command_interval、既定25秒）。実機で確かめるまでの逃げ道')
+    ap.add_argument('--max-resends', type=int, default=4,
+                    help='resend-after 間隔での再送を最大何回まで繰り返すか（--arm-io server のみ。2026-10-14追加）')
     ap.add_argument('--aim-correct', action='store_true',
                     help='撮影の前に深度で隅肉の根元を見つけ、アームの姿勢を直す（aim_correct.py。実機未試験）')
     ap.add_argument('--aim-dist', type=float, default=0.22, help='補正で合わせるカメラ→根元の距離[m]')
@@ -788,6 +827,9 @@ def main():
                     help='撮影スクリプト（sim の通し試験では tools/sim_fakes/rs_snap_fake.sh を渡す）')
     ap.add_argument('--no-bracket', action='store_true',
                     help='姿勢に bracket（関節を振って複数枚撮る）があっても、基準の1枚だけにする')
+    ap.add_argument('--sweep', action='store_true',
+                    help='姿勢に sweep（ビード方向に複数点撮る横一線撮影）があれば、bracketの代わりにそれを行う。'
+                         '各点で --aim-correct が有効なら補正してから撮る（実機未試験）')
     ap.add_argument('--depth', default='',
                     help='深度の撮影解像度（例 848x480）。省略時は 1280x720（最短測距 約0.28m）')
     ap.add_argument('--hold', type=float, default=0.0, help='撮影のあと、収納する前に待つ秒数（動画用）')
