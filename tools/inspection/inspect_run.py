@@ -390,7 +390,13 @@ class Runner:
                 resend_count += 1
                 self.say(f'    {elapsed:.1f}秒ずれが縮まらない（最大ずれ {err:.1f}度）。'
                          f'再送します（{resend_count}/{self.a.max_resends}）')
+                send_t0 = time.time()
                 self.arm.send(pose7)
+                # --min-send-interval が立っていると send() がその分だけ待ってから戻る。
+                # これはアームへ指令を出せるまでの自主規制の待ちであって、アームが応答しない時間ではないので、
+                # t0 を同じだけ押し出して arm_timeout の消費に数えない（2026-10-14、レビュー指摘で発覚:
+                # min_send_interval > arm_timeout だと、この待ちだけで直後の判定に引っかかり再送1回で必ず止まっていた）
+                t0 += time.time() - send_t0
                 best_err_time = time.time()
             if elapsed > self.a.arm_timeout:
                 raise Abort(f'アームが指令に届かない（最大ずれ {err:.1f}度、実測 '
