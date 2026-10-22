@@ -14,7 +14,7 @@ from go2_localization.height_slice_viz import HeightSliceViz
 class _FakeParams:
 
     def __init__(self, floor_z=-0.27, floor_margin=0.3, max_height=0.3,
-                 body_exclude_min_x=-0.38, body_exclude_max_x=0.35,
+                 body_exclude_min_x=-0.38, body_exclude_max_x=0.37,
                  body_exclude_min_y=-0.18, body_exclude_max_y=0.18):
         self.floor_z = floor_z
         self.floor_margin = floor_margin
@@ -81,6 +81,6 @@ def test_point_inside_body_footprint_is_excluded_even_if_obstacle():
 
 
 def test_point_outside_body_footprint_is_still_kept_as_obstacle():
-    # footprint矩形のすぐ外(x=0.4 > body_exclude_max_x=0.35)は通常どおり障害物扱い
+    # footprint矩形のすぐ外(x=0.4 > body_exclude_max_x=0.37)は通常どおり障害物扱い
     point = np.array([[0.4, 0.05, 0.1]])
     assert _mask(point)[0]
