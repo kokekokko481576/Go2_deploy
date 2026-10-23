@@ -9,8 +9,9 @@
 # (driver 用の除外リストと共有して "not found" で壊れたことがある。2026-09-08)。
 .git
 chapter1
-# sim が使うのは external/go2_ros2_sim_py だけ。実機用の2つは送らない
-external/unitree_ros2
+# sim が使うのは external/go2_ros2_sim_py と、unitree_ros2 のメッセージ定義(unitree_go/unitree_api。#83)。
+# **external/unitree_ros2 は除外しないこと**(sim が COPY する。約4MBなので送っても軽い)。
+# 実機用の SDK は送らない
 external/unitree_sdk2
 ros2_ws/build
 ros2_ws/install
