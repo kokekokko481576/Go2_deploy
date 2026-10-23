@@ -1,16 +1,17 @@
 #!/bin/bash
 # Gazebo で「マーカー接近 → 伏せる → アーム → 撮影 → 収納 → 起立」を流して録画する（2026-09-29、作業報告の動画用）。
 #
-# 前提: go2-sim コンテナが起動していること。~/marker_detection が /marker_detection に読み取り専用で
-#       マウントされていること（docker/sim/compose.override.yaml）。Nav2 は切っておく:
+# 前提: go2-sim コンテナが起動していること（~/marker_detection は要らない。必要なものは compose.yaml が
+#       /ros2_ws・/sim_tools・/inspection にマウントする、#83）。Nav2 は切っておく:
 #   cd ~/bridge/Go2_deploy/docker/sim && xhost +local:docker && SIM_ENABLE_NAV2=false SIM_ENABLE_RVIZ=false docker compose up -d
 #
-# 使い方: ~/marker_detection/tools/sim_gz/run_demo.sh [撮影姿勢で待つ秒数]
-# 出力: ~/デスクトップ/Go2_sim_デモ_<日時>.mp4 と、アーム先端カメラの写真 ~/marker_detection/logs/sim/demo_shots_<日時>/
+# 使い方: docker/sim/tools/demo/run_demo.sh [撮影姿勢で待つ秒数]
+# 出力: $DEMO_OUT（既定 ~/go2_sim_demo）/Go2_sim_デモ_<日時>.mp4 と、アーム先端カメラの写真 $DEMO_OUT/demo_shots_<日時>/
 set -u
 C=go2-sim
 HOLD=${1:-2}
 TAG=$(date +%m%d_%H%M%S)
+DEMO_OUT=${DEMO_OUT:-$HOME/go2_sim_demo}; mkdir -p "$DEMO_OUT"
 HERE=$(cd "$(dirname "$0")" && pwd)
 R() { docker exec "$C" bash -c ". /opt/ros/jazzy/setup.bash && source \$WORKSPACE_DIR/install/setup.bash && $1"; }
 RD() { docker exec -d "$C" bash -c ". /opt/ros/jazzy/setup.bash && source \$WORKSPACE_DIR/install/setup.bash && $1"; }
@@ -20,8 +21,8 @@ kill_ours() {
   docker exec "$C" bash -c 'ps -ef | grep -E "[a]priltag_node|[s]im_tag_bridge|[m]arker_approach.approach_node|[d]emo_flow.py" | awk "{print \$2}" | xargs -r kill -9' 2>/dev/null
 }
 kill_ours
-# 日本語フォント（字幕用。コンテナには入っていない）
-docker exec "$C" mkdir -p /tmp/fonts && docker cp /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc "$C":/tmp/fonts/ >/dev/null
+# 日本語フォント（字幕用。イメージに fonts-noto-cjk が入っている）
+docker exec "$C" bash -c 'mkdir -p /tmp/fonts && ln -sf /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc /tmp/fonts/'
 # 部材と録画用カメラ
 "$HERE/spawn_scene.sh"
 # 出発位置: マーカー(-4.96,1.5)の手前1.3m、中心線上、マーカーを向く
@@ -33,22 +34,22 @@ R 'for m in REST TROT; do ros2 topic pub -t 2 /robot1/robot_mode quadropted_msgs
 RD "ros2 run apriltag_ros apriltag_node --ros-args -r image_rect:=/robot1/color/image_raw -r camera_info:=/robot1/color/camera_info \
     -p family:=36h11 -p size:=0.078434 -p detector.decimate:=1.0 -p use_sim_time:=true > /tmp/apriltag.log 2>&1"
 RD "python3 /sim_tools/sim_tag_bridge.py > /tmp/bridge.log 2>&1"
-RD "export PYTHONPATH=/marker_detection/ros2_ws/src/marker_approach:\$PYTHONPATH && python3 -m marker_approach.approach_node --ros-args \
+RD "export PYTHONPATH=/ros2_ws/src/marker_approach:\$PYTHONPATH && python3 -m marker_approach.approach_node --ros-args \
     -r cmd_vel_raw:=/robot1/cmd_vel -p camera_x:=0.33 -p camera_y:=0.0 -p camera_z:=0.0057 \
     -p standoff:=0.65 -p dry_run:=false -p use_normal:=false \
     -p fov_budget_deg:=12.0 -p drive_bearing_limit_deg:=18.0 -p max_runtime:=150.0 > /tmp/approach.log 2>&1"
 sleep 6
 # 録画を始めてから流す
-RD "python3 /marker_detection/tools/sim_gz/recorder.py /tmp/demo_$TAG.mp4 > /tmp/recorder.log 2>&1"
+RD "python3 /sim_tools/demo/recorder.py /tmp/demo_$TAG.mp4 > /tmp/recorder.log 2>&1"
 sleep 3
-R "rm -rf /tmp/demo_shots && python3 /marker_detection/tools/sim_gz/demo_flow.py $HOLD"
+R "rm -rf /tmp/demo_shots && python3 /sim_tools/demo/demo_flow.py $HOLD"
 rc=$?
 # 録画は「完了」の3秒後に自分で書き終える。念のため待つ
 for _ in $(seq 20); do docker exec "$C" bash -c 'ps -ef | grep -q "[r]ecorder.py"' || break; sleep 1; done
 kill_ours
 docker exec "$C" tail -1 /tmp/recorder.log
-OUT="$HOME/デスクトップ/Go2_sim_デモ_$TAG.mp4"
+OUT="$DEMO_OUT/Go2_sim_デモ_$TAG.mp4"
 docker cp "$C":/tmp/demo_$TAG.mp4 "$OUT" && echo "動画: $OUT"
-mkdir -p "$HOME/marker_detection/logs/sim/demo_shots_$TAG" && docker cp "$C":/tmp/demo_shots/. "$HOME/marker_detection/logs/sim/demo_shots_$TAG/" 2>/dev/null && echo "写真: ~/marker_detection/logs/sim/demo_shots_$TAG/"
+mkdir -p "$DEMO_OUT/demo_shots_$TAG" && docker cp "$C":/tmp/demo_shots/. "$DEMO_OUT/demo_shots_$TAG/" 2>/dev/null && echo "写真: $DEMO_OUT/demo_shots_$TAG/"
 echo "接近のログ: docker exec $C tail -20 /tmp/approach.log"
 exit $rc

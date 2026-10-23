@@ -61,6 +61,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     ros-jazzy-tf2-ros \
     ros-jazzy-tf2 \
     python3-colcon-common-extensions \
+    fonts-noto-cjk \
     tree \
     htop \
     tmux \
