@@ -88,6 +88,12 @@ RUN curl -sS https://starship.rs/install.sh | sh -s -- --yes
 # submodule内の .git (gitlink、コンテナ内では無効な参照になる)が含まれても実害はない
 COPY external/go2_ros2_sim_py /root/ws/src
 
+# 実機用ツール(tools/inspection/inspect_run.py)がsimでも同じコードで動くよう、
+# unitree_go / unitree_api のメッセージ定義(rosidlのみ・geometry_msgsにだけ依存)を入れる(#83)。
+# unitree_hg は不要。driverイメージと同じ submodule から取る
+COPY external/unitree_ros2/cyclonedds_ws/src/unitree/unitree_go /root/ws/src/unitree/unitree_go
+COPY external/unitree_ros2/cyclonedds_ws/src/unitree/unitree_api /root/ws/src/unitree/unitree_api
+
 WORKDIR /root/ws
 
 SHELL ["/bin/bash", "-c"]
