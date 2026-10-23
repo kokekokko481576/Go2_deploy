@@ -1,3 +1,11 @@
+"""実機で地図を作る一式(static_tf / ekf / height_slice_viz / pointcloud_to_laserscan / slam_toolbox)。
+
+**⚠ 実機では docker/driver/real_up.sh を使うこと。このlaunchのままでは床除去が効かず、
+床を障害物として地図に焼く**(2026-09-04 実測で1m未満のビームが81.3%)。
+height_slice_viz_real.launch.py が cloud_in=/utlidar/cloud・floor_z=-0.27(sim値) のままで、
+実機では /utlidar/cloud_base_restamped・floor_z=-0.35 にする必要がある。
+real_up.sh はこの2点を上書きして起動する(README「実機向け」参照)。
+"""
 import os
 
 from ament_index_python.packages import get_package_share_directory

@@ -59,6 +59,12 @@ COPY external/unitree_ros2/example/src /root/ws/src/unitree_ros2_example
 # cmd_vel(経路追従の安全フィルタ出力)をGo2工場出荷歩容のSport Mode API Move命令に変換する
 # 自作の中継ノード(unitree_apiに依存するためdriverイメージ側でビルドする。Issue #3関連)
 COPY docker/driver/bridge/ /root/ws/src/go2_sport_bridge
+# D1-Tアームのブリッジ(Issue #64)。中身は2パッケージ:
+#   unitree_arm   : DDS型名をSDKと一致させるためのメッセージ定義(rt/arm_Command 用)
+#   d1_arm_bridge : arm_command(rad) を D1 の JSON コマンド(度)へ変換して送るノード
+# **unitree_sdk2 にはリンクしない。** ROS2側のCycloneDDSだけで話すことで、
+# 実機で踏んだ純正CycloneDDSとのABI衝突(free(): invalid pointer)を避けている。
+COPY docker/driver/d1_bridge/ /root/ws/src/d1_bridge
 
 WORKDIR /root/ws
 SHELL ["/bin/bash", "-c"]
@@ -74,6 +80,34 @@ RUN . /opt/ros/humble/setup.bash && \
 RUN mkdir -p /root/ws/install/unitree_ros2_example/lib/unitree_ros2_example && \
     find /root/ws/install/unitree_ros2_example -maxdepth 1 -type l -executable | \
     xargs -I{} ln -s {} /root/ws/install/unitree_ros2_example/lib/unitree_ros2_example/
+
+# --- D1-T アーム (Issue #63/#64) ---
+# D1-TはGo2のSport Mode APIとは別系統で、unitree_sdk2 のDDSチャネル層を直接使う
+# (ROS2のメッセージは介さない)。unitree_sdk2 はプリビルドの静的ライブラリと
+# 独自ビルドのCycloneDDSを /usr/local へコピーするだけなので、BUILD_EXAMPLES=OFF に
+# すればビルド自体は軽い。
+COPY external/unitree_sdk2 /root/unitree_sdk2
+RUN cmake -S /root/unitree_sdk2 -B /root/unitree_sdk2/build \
+        -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release && \
+    cmake --install /root/unitree_sdk2/build && \
+    rm -rf /root/unitree_sdk2/build
+
+# **ldconfig は実行しない。**
+# unitree_sdk2 が /usr/local/lib に入れる libddsc/libddscxx は、ROS2 Humble が使う
+# CycloneDDS(/opt/ros/humble/lib)とABIが違う。ld.so のキャッシュに載せてしまうと
+# ROS2側のノードがこちらを掴んで "free(): invalid pointer" で落ちる。
+# D1のサンプルだけが /usr/local/lib を見れば良いので、実行時の解決は
+# d1_sdk/run.sh の LD_LIBRARY_PATH に任せる(リンク時は ld の既定探索パスで足りる)。
+COPY docker/driver/d1_sdk /root/d1_sdk
+RUN cmake -S /root/d1_sdk -B /root/d1_sdk/build -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build /root/d1_sdk/build -j"$(nproc)"
+
+# d1_bridge の検査用ツール(dds_probe)。ROS2側の /arm_Command が機体と同じ
+# DDSトピック・型として見えるかを、**実機なしで**確かめるためのもの。
+# d1_sdk と同じく素のcmakeでビルドし、ROS2とは別プロセスで動かす。
+COPY docker/driver/d1_bridge/tools /root/d1_bridge_tools
+RUN cmake -S /root/d1_bridge_tools -B /root/d1_bridge_tools/build -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build /root/d1_bridge_tools/build -j"$(nproc)"
 
 COPY docker/driver/setup_dds.sh /setup_dds.sh
 COPY docker/driver/entrypoint.sh /entrypoint.sh

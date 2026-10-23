@@ -9,7 +9,7 @@ import re
 import yaml
 from ament_index_python.packages import get_package_share_directory
 
-_EXPECTED_MIN_X, _EXPECTED_MAX_X = -0.38, 0.35
+_EXPECTED_MIN_X, _EXPECTED_MAX_X = -0.38, 0.37
 _EXPECTED_MIN_Y, _EXPECTED_MAX_Y = -0.18, 0.18
 
 

@@ -1,0 +1,11 @@
+# driver イメージ専用の除外リスト(BuildKit が有効なときだけ使われる。ルートの .dockerignore 参照)。
+#
+# driver のビルドコンテキストはリポジトリルート(docker/driver/compose.yaml の `context: ../..`)。
+# driver が使わない巨大なディレクトリを送らないようにする。
+.git
+chapter1
+# sim 用の Gazebo 一式(約365MB)。driver は使わない
+external/go2_ros2_sim_py
+ros2_ws/build
+ros2_ws/install
+ros2_ws/log

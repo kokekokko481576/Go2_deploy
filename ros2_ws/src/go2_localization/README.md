@@ -625,7 +625,7 @@ free_thresh: 0.25         # これ以下を自由空間とみなす
 
 対策として、`target_frame`(base_link)相対のx/y矩形内の点を距離に関係なく除外する
 チェックを追加した。矩形は`go2_path_following`/`go2_path_planning`が使っている既存の
-Nav2 footprint定義(`[[0.35,0.18],[0.35,-0.18],[-0.38,-0.18],[-0.38,0.18]]`)をそのまま
+Nav2 footprint定義(`[[0.37,0.18],[0.37,-0.18],[-0.38,-0.18],[-0.38,0.18]]`)をそのまま
 既定値に流用している(脚の可動域を含むよう既に余裕を持って定義されているため)。
 
 **既知の制約**: 距離ではなくbase_link相対のx/y位置だけで判定するため、この矩形の
@@ -646,6 +646,18 @@ Nav2 footprint定義(`[[0.35,0.18],[0.35,-0.18],[-0.38,-0.18],[-0.38,0.18]]`)を
   起動直後に1回だけ tf キャッシュ待ちのdropが出るが自然に解消する
 
 ## 実機向け(未検証・下ごしらえ、2026-09-02追加)
+
+> **⚠ 実機では `docker/driver/real_up.sh` を使うこと。下記の `mapping_real.launch.py` は
+> そのままでは床除去が効かず、床を障害物として地図に焼く**(2026-09-04 実測で、1m未満のビームが81.3%)。
+> 実機では次の2点が必要だが、このlaunchにはまだ入っていない(恒久対応は未決):
+>
+> - `height_slice_viz` の入力を `/utlidar/cloud` ではなく、driver側で時刻を打ち直した
+>   `/utlidar/cloud_base_restamped` にする(`/utlidar/cloud_base` はファームウェアが base_link 座標系で
+>   配信するので未実測のLiDAR搭載TFを迂回でき、機体の時計は開発PCより約1110秒遅れているので再スタンプが要る)
+> - `floor_z` を -0.27(sim) ではなく実測の -0.35 にする
+>
+> `real_up.sh` はこの2点を上書きして起動し、slam_toolbox の前に床除去の自己検定も行う。
+> 詳細は `docker/driver/real_up.sh` 冒頭のコメントと `docs/手順/実機Go2接続チェックリスト.md`。
 
 `計画/自己位置推定.md` M1/M2(実機)・Issue #10/#13/#67 向けに、実機データが来たら
 すぐ「クソ雑map」作りに着手できるよう用意した一式。**実機接続(Issue #3)がまだ検証
@@ -681,7 +693,7 @@ sim版との対応:
 
 ```bash
 # driverコンテナ: 実機/utlidar/cloud・sportmodestateを購読できる状態にしてから
-docker compose exec driver ros2 run go2_sport_bridge state_to_odom_imu_node
+docker compose exec driver bash -c 'source /setup_dds.sh; ros2 run go2_sport_bridge state_to_odom_imu_node'
 
 # devコンテナ: 地図作成
 cd ~/ros2_ws && colcon build --symlink-install --packages-select go2_localization
