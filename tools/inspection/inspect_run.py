@@ -51,7 +51,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 D1 = Path.home() / 'd1_sdk' / 'run.sh'
 RS_SNAP = HERE / 'rs_snap.sh'
-LOG_DIR = HERE.parent / 'logs'
+LOG_DIR = Path(os.environ.get('INSPECT_LOG_DIR', str(HERE.parent / 'logs')))
 # rs_snap.sh / rs_snap_fake.sh と共有する撮影の保存先（両方とも RS_OUT を見る）。
 RS_OUT = Path(os.environ.get('RS_OUT', str(Path.home() / 'marker_detection' / 'logs' / 'rs')))
 NAMES = ['FR_hip', 'FR_thigh', 'FR_calf', 'FL_hip', 'FL_thigh', 'FL_calf',
@@ -272,7 +272,7 @@ class Runner:
         self.robot = None if a.dry_run else Robot()
         self.arm = None   # ArmLink（--arm-io server のとき、run() の中で起動する）
         self.corr_path = []   # 撮影位置の補正でたどった姿勢（先頭が基準の撮影姿勢）。収納はこれを逆にたどってから
-        LOG_DIR.mkdir(exist_ok=True)
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
         self.logf = open(LOG_DIR / time.strftime('inspect_%m%d_%H%M%S.log'), 'w', buffering=1)
 
     # ---- 表示・確認 ----
