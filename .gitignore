@@ -23,3 +23,6 @@ docker/sim/compose.override.yaml
 
 # GATE1計測の生ログ(CSV)。集計結果はREADMEに要約を記載するのでローカル限定
 ros2_ws/src/go2_path_following/scripts/results/
+
+# inspect_run.py の実行ログ(inspect_*.log)。実行するたびに生成されるのでローカル限定
+tools/logs/

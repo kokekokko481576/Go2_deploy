@@ -1,0 +1,617 @@
+"""turn-drive-turn 方式の接近制御則（**ROS非依存**。単体でシミュレーション検証できる）。
+
+前身は vx/vy/wz を同時に出す全方向制御だったが、**Go2の横移動(vy)は使えない**ため
+作り直した。実測（2026-09-02、4秒指令の実効率）:
+
+    vx=0.15 → 83% / vy=0.15 → 1.3% / vy=0.20 → 7.7%
+
+しかも `vy=-0.056` 程度が出ているだけで前進そのものが止まる（41秒で127mm）。
+同じ条件で `max_vy:=0.0` にすると1652mmを11秒で走り切った。
+つまり **横移動は「効かない」ではなく「前進を殺す」**。混ぜてはいけない。
+
+## 構成
+
+前進(vx)と旋回(wz)を**同時に出さず、区間に分ける**。
+
+    TURN_TO_GOAL  その場旋回。ゴール（マーカー法線上のstandoff点）を向く
+    DRIVE         直進のみ（wz=0）。ゴールの手前 stop_lead_distance で止める
+    FINAL_TURN    その場旋回。マーカーを正面に入れる（＝法線上にいるので正対になる）
+    CHECK         測り直して、残差が許容内なら完了。駄目なら TURN_TO_GOAL から繰り返す
+
+各区間の切り替わりでは必ず **SETTLE**（ゼロ指令で settle_time 秒静止）を挟む。
+四足は停止指令後も踏み出し中の歩を完了させ（実測の行き過ぎ約47mm）、
+静止指令でも揺れる（距離測定の標準偏差が0.2mm→15mmに跳ねる）。
+**動揺中の観測で次の区間を決めてはいけない。**
+
+旋回はオドメトリを使わず、毎周期その時点の画像から見えるゴール方位をゼロに近づける
+**視覚のクローズドループ**である。角度を積分しないので機体の旋回効率のばらつきに強い。
+
+## マーカーを視野から外さない（**この方式の一番の難所**。設計の理由を残す）
+
+Go2前方カメラの視野は水平±46度しかない。ここを外すと制御不能になる。
+turn-drive-turn では次の2つが視野を食う。
+
+1. **ゴールを向く旋回**。マーカーの方位は旋回した分だけ反対側へ寄る
+2. **直進**。ゴールはマーカーの真正面ではなく法線上の点なので、進路はマーカーの
+   横を通る弦になる。向きを変えずに近づく間、マーカーの方位は**単調に増える**
+
+2が効く量は大きい。法線から30度ずれた位置から弦を直進すると、到達時点で
+マーカーの方位は**約44度**になる（シミュレーションで確認。±46度をほぼ使い切る）。
+20度なら約30度、35度なら約50度で**視野から出る**。
+
+**視野の制約は base_link ではなくカメラ位置で効く。** カメラは base_link 前方327mmに
+あり、近距離では同じ機体姿勢でもカメラから見た方位のほうが大きくなる（実例: 機体から
+0.9m・方位29度のマーカーは、カメラから見ると方位44度）。**判定はカメラ座標系で行う。**
+
+対策は**弦を1本で走らず折れ線に刻むこと**。刻めるのは、直進のたびに法線からのずれ
+（alpha）が減り、次に必要な旋回が小さくなるからである（30度から弦の半分を走ると22度）。
+
+  - 旋回の目標は `[bearing_cam - fov_budget, bearing_cam + fov_budget]` に切り詰める。
+    ゴール方位がこの外なら、**マーカーを画面に戻す向きに旋回する**（fov_budget まで戻す）
+  - 直進中にカメラ方位が `drive_bearing_limit` を超えたら区間を切り、向き直してから続ける
+
+`drive_bearing_limit > fov_budget` でなければ、旋回した直後に区間を切って足踏みする。
+
+ゴールが背後（|goal_bearing| > 90度）にあるときは**旋回せず後退する**。
+振り向くとマーカーを確実に見失うため。後退中は視野の予算も使わない。
+
+## 収束しないことを検知する
+
+折れ線で刻んでも、法線から大きくずれた至近距離からは**原理的に届かない**。
+（法線まで横に325mm動く必要があるのに、その方向は視線から90度＝視野外。）
+1周で `min_progress` も縮まらなければ、残差を報告して打ち切る。**黙って粘らない。**
+
+## ゴールの置き方（`use_normal`）
+
+既定は**マーカー法線上の standoff 点**である。マーカーの面に正対して止まるので、
+アームで作業対象に向かうならこれが要る。ただし法線上へ行くには横へ寄る必要があり、
+**横へ寄る方向は視線から90度＝視野の外**なので、上に書いた弦の刻みで少しずつしか
+寄れない。届く範囲は 2m以上からで法線±40度、1mからは±20度しかない。
+
+`use_normal=False` にすると、ゴールを**視線上の standoff 点**＝「マーカーの手前」に
+置く。横へ寄る必要が消えるので**届かない配置がなくなり**、弦にもならないので
+マーカーの方位は増えない（視野の心配が要らない）。代償は姿勢で、
+
+    法線から alpha ずれた位置から寄ると、法線上の点から 2*standoff*sin(alpha/2) 離れ、
+    マーカーの面に対して alpha だけ斜めを向いたまま止まる
+    （standoff 0.65m・alpha 28.6度なら 321mm 横、面に対して28.6度斜め）
+
+**alpha の観測と報告はどちらのモードでも行う。** 使うかどうかだけが違うので、
+視線接近で止まったあとのログを見れば「法線からどれだけ斜めか」は分かる。
+
+## 姿勢の曖昧性と alpha（前身から引き継ぎ）
+
+平面タグの姿勢は2解あり、正対に近いほど拮抗して法線が信用できない。
+`ambiguity >= min_ambiguity` のときだけ法線推定を更新し、
+**ロボット座標系のベクトルではなく「視線と法線のなす角 alpha」で保持する**
+（その場旋回で不変な相対量。turn-drive-turn は旋回区間が長いのでこれが効く）。
+"""
+import math
+
+
+def wrap(a):
+    return (a + math.pi) % (2 * math.pi) - math.pi
+
+
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+class Params:
+    """制御則のパラメータ。既定値は実機実測（2026-09-02）に基づく。"""
+
+    # 幾何
+    standoff = 0.65              # マーカー法線上のゴール距離[m]
+    # 到達判定[m]。**2026-09-23 実機実測で 0.06 → 0.175 へ。**
+    # 停止の行き過ぎが0.120m（最悪0.317m）あり、6cmには原理的に入れない。
+    # アーム側がビード位置の誤差±0.175mを吸収できるので、そこに合わせた
+    # （3軸・ビード高さ床+0.08m・胴体の占有を除外した最良点 横0.375m での余裕）。
+    pos_tolerance = 0.175
+    # 正対判定[rad]。**5度より厳しくしても入れない。** 指令が実速度に現れるまで0.3sあり、
+    # 最低旋回速度 min_wz では停止指令のあとも約4度回る（turn_lead_angle）。
+    # 前身の実機ログの「方位誤差 -0.3度」は**停止指令の瞬間の観測値**で、
+    # 機体が落ち着いたあとの値は測っていない。こちらは静止後に測り直した値を報告する。
+    ang_tolerance = 0.26         # 正対判定[rad]（15度）。2026-09-23実測で 0.09 から緩めた
+    # ゲインと速度
+    k_x = 0.6
+    k_yaw = 1.0
+    # **2026-09-23 実機実測で全面改訂。改訂前の値は全て踏み出し下限を割っていた。**
+    #   前進: 0.20の指令では実動率34%で足が出ない（#74 の正体）。0.25で実速度0.107、
+    #         0.30で0.181、0.35で0.234、0.40で0.285、0.50で0.383 [m/s]。
+    #         0.30以下は直進性も崩れる（0.25では1.86m走る間に34度向きが変わった）
+    #   旋回: 0.20/0.30は回らない。0.40で13〜30%、0.60で42%、0.80で50%、1.00で57%
+    max_vx = 0.40
+    max_wz = 1.00
+    min_translation_speed = 0.35  # 0.30以下は直進性が崩れるので実用下限はここ
+    min_wz = 0.60                 # 0.40以下は実用にならない
+    # 区間の切り替え
+    turn_tolerance = 0.14        # ゴール方位をこの範囲に入れたら旋回終了[rad]（8度）
+                                 # 行き過ぎ補正後の残差(±1〜2度)＋観測雑音に対する余裕
+    redirect_tolerance = 0.26    # 直進中にゴール方位がこれを超えたら旋回に戻る[rad]（約15度）
+    # 停止指令後の行き過ぎ分だけ手前で止める[m]。
+    # **2026-09-23 実測: 0.285m/s で 0.120m。** ただしゴール手前では min_translation_speed
+    # まで落ちて 0.227m/s なので、そのときの行き過ぎ 0.095m に合わせる。
+    # 改訂前の47mmは、実機でほとんど歩けていなかった低速域での値。
+    # **8本中1本で0.317mの外れ値が出ている。原因未特定。** 外れた本は pos_tolerance を超える。
+    stop_lead_distance = 0.10
+    # 旋回の行き過ぎ分[rad]。停止指令のあとに回ってしまう角度だけ手前で指令を切る。
+    # 既定 0.07rad(4度) は 指令遅れ0.3s × min_wz×旋回効率 からの推定で、**実機では未実測**。
+    # 実機で測る手順: その場旋回を1秒だけ指令し、指令をゼロにした時刻の方位と
+    # 静止後の方位を比べる（この量はシミュレータでは検証できない）。
+    # 判定は `max(許容値, この値)` で行う。**足し算にしてはいけない**（許容値が惰性と
+    # 同程度のとき、早く切りすぎて逆側へ行き過ぎる。シミュレーションで確認）。
+    # **2026-09-23 実測。** 行き過ぎは速度依存で、指令0.60で5.9〜8.0度、
+    # 0.80で12.2〜13.4度、1.00で17.8〜18.7度。旋回の終盤は k_yaw により
+    # min_wz(0.60) まで落ちるので、**そのときの行き過ぎ7度に合わせる**。
+    # 同じ速度での再現性は±1〜2度なので、補正後の残差はその程度。
+    turn_lead_angle = 0.12
+    settle_time = 0.7            # 区間の間に静止する時間[s]
+    max_cycles = 8               # turn-drive-turn の繰り返し上限
+    min_progress = 0.03          # 1周でこれだけ縮まらなければ打ち切る[m]
+    # 視野の予算。**カメラ座標系での**マーカー方位で数える（base_linkではない。後述）
+    fov_budget = math.radians(25.0)        # 旋回後にマーカーをこの方位内に残す
+    drive_bearing_limit = math.radians(33.0)  # 直進中にこれを超えたら区間を切って向き直す
+    # ビードをどこに置くか。**撮影位置に立ったときの、機体から見たビードの位置**[m]。
+    # マーカーを別置きスタンドにする前提（2026-09-23の方針）。マーカーをワークに貼ると、
+    # カメラが要求する距離(base_linkから0.53m以上)とアームが要求する距離(0.375m)が
+    # 両立しない。スタンドをビードから「面に沿って standoff・面から bead_right」の位置へ
+    # 置けば、撮影位置に着いた時点でビードがアームの最良点に来る。
+    #
+    #   bead_right = 0.375 は3軸・ビード高さ床+0.08m・胴体の占有を除外した最良点で、
+    #   そこから全方向に±0.175m ずれても撮れる（tools/arm_reach_study.py）。
+    #   bead_forward = 0 は機体の真横。前後は -0.40〜+0.50m まで撮れるので制約は緩い。
+    #
+    # **真横旋回は要らない。** 撮影位置に着いた時点でワークに対して既に真横を向いている。
+    bead_forward = 0.0
+    bead_right = 0.375
+    # base_link -> カメラ の取り付け（前方・左方[m]）。視野の判定に使う
+    # **2026-09-23 実機実測。** この docstring が「判定はカメラ座標系で行う」と書き、
+    # 327mm という値まで挙げているのに、**既定値が0.0のままで実際には base_link で
+    # 判定していた**（approach_node の declare も launch も 0.0）。
+    camera_x = 0.333
+    camera_y = 0.0
+    # 法線推定
+    min_ambiguity = 2.0
+    normal_alpha = 0.3
+    # **法線は静止しているときだけ観測する（2026-09-24 実機で追加）。**
+    # 正面付近では姿勢推定の2解が区別できず、止まっていれば曖昧性は1.4〜1.5としきい値を
+    # 割って正しく捨てられる。ところが**歩行中の揺れで曖昧性が2〜5へ跳ね、誤った解を
+    # 信用して alpha を 0 → 14度まで積み上げた**（正対から1.85mで開始した1本目）。
+    # 静止待ちの前半は停止の惰性で機体がまだ動いているので、
+    # 静止待ちに入ってからこの秒数が経つまでは使わない。sim（誤った解を30%混ぜる）で
+    # 0.4 / 0.6 / 0.8秒と settle_time 0.7 / 1.0秒を振り、0.6秒・0.7秒が最良
+    # （50本中34本合格。静止ゲートなしは11本）。
+    #
+    # **「止まったか」は時間でなくマーカーの見え方で判定する（2026-09-28）。**
+    # 時間で決め打ちしていた頃（静止待ちに入って0.6秒後から観測）、実機の5本目で
+    # 停止後約0.8秒の惰性中に観測して alpha を6.6度過大に確定した。
+    # 静止待ちの間、直近 still_window 秒のマーカー位置（base_link）の振れ幅が
+    # still_tolerance 未満のときだけ静止とみなし、そのときだけ alpha を観測する。
+    # 窓は静止待ちに入るたびに空にする（動いていた頃の観測で静止を判定しない）。
+    # 静止待ちの時間(settle_time)が過ぎても静止を確認できなければ、最大 still_max_extra 秒
+    # 延ばす。それでも確認できなければ、その回は alpha を更新せずに次の区間へ進む。
+    still_window = 0.3
+    still_tolerance = 0.01
+    still_max_extra = 1.0
+    still_min_samples = 3        # 窓内にこの数の観測が無ければ判定しない（14fpsで約4枚）
+    # **正対の前後はマーカーを見失っても即座に止めない（2026-09-24 実機で追加）。**
+    # 弦に沿ってゴールへ入ると、着いた時点でマーカーがカメラ方位30度超の視野の端にあり、
+    # 停止の惰性でさらに寄って視野から出る。正対旋回はまさにマーカーを視野の中央へ
+    # 戻す動作なので、最後に見えた方位へ回し続ければ見つけ直せる。
+    # この秒数までは見失いを許す（静止待ちと正対旋回の間だけ。直進・ゴールへの旋回では許さない）。
+    final_lost_timeout = 2.0
+    # ゴールをどこに置くか。True: マーカー**法線上**の standoff 点（正対して止まる）。
+    # False: **視線上**の standoff 点＝「マーカーの手前」。後者は横へ寄る必要が
+    # ないので届かない配置がなくなるが、**法線からのずれ alpha はそのまま残る**
+    # （alpha ずれた位置から寄ると、法線上の点からは 2*standoff*sin(alpha/2) 離れて止まる）。
+    # どちらでも alpha の観測と報告は行う。使うかどうかだけが違う。
+    use_normal = True
+
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            if not hasattr(Params, k):
+                raise KeyError(f'未知のパラメータ: {k}')
+            setattr(self, k, v)
+
+    def validate(self):
+        """設定の矛盾を返す（空リストなら問題なし）。"""
+        bad = []
+        if self.max_vx < self.min_translation_speed:
+            bad.append(f'max_vx({self.max_vx}) が min_translation_speed'
+                       f'({self.min_translation_speed}) より小さい。'
+                       'この設定では脚が踏み出さず、ゴール手前で詰められなくなる')
+        if self.max_wz < self.min_wz:
+            bad.append(f'max_wz({self.max_wz}) が min_wz({self.min_wz}) より小さい')
+        if self.drive_bearing_limit <= self.fov_budget:
+            bad.append(f'drive_bearing_limit({math.degrees(self.drive_bearing_limit):.0f}度) が '
+                       f'fov_budget({math.degrees(self.fov_budget):.0f}度) 以下。'
+                       '旋回で戻した直後に区間を切ることになり、その場で足踏みする')
+        if self.ang_tolerance < self.turn_lead_angle:
+            bad.append(f'ang_tolerance({math.degrees(self.ang_tolerance):.1f}度) が '
+                       f'turn_lead_angle({math.degrees(self.turn_lead_angle):.1f}度) より小さい。'
+                       '停止判定が惰性の推定値だけで決まり、推定が外れると判定に入らない。'
+                       'ang_tolerance を turn_lead_angle 以上にすること')
+        # マーカーを別置きスタンドにする前提の検査（2026-09-23）
+        if self.standoff - self.camera_x < 0.28:
+            bad.append(f'standoff({self.standoff}) - camera_x({self.camera_x}) = '
+                       f'{self.standoff - self.camera_x:.2f}m しかなく、到達時にカメラが'
+                       'マーカーへ近づきすぎる。実測の検出下限は0.28m'
+                       '（それ以下は再投影誤差が較正RMSの5倍を超える）')
+        if not 0.05 <= self.bead_right <= 0.55:
+            bad.append(f'bead_right({self.bead_right}) がアームの届く帯(0.05〜0.55m)の外。'
+                       'この位置のビードは3軸でも撮れない（tools/arm_reach_study.py）')
+        if abs(self.bead_forward) > 0.40:
+            bad.append(f'bead_forward({self.bead_forward}) がアームの届く範囲'
+                       '(-0.40〜+0.50m)の外')
+        if self.still_window > self.settle_time + self.still_max_extra:
+            bad.append(f'still_window({self.still_window}) が静止待ちの最長'
+                       f'(settle_time+still_max_extra={self.settle_time + self.still_max_extra})'
+                       'より長く、静止を一度も確認できない')
+        if self.pos_tolerance <= self.stop_lead_distance:
+            bad.append(f'pos_tolerance({self.pos_tolerance}) が '
+                       f'stop_lead_distance({self.stop_lead_distance}) 以下。'
+                       '手前で止めた時点で到達判定に入らず、旋回と直進を往復する')
+        return bad
+
+
+class Command:
+    """1周期の出力。"""
+
+    def __init__(self, vx, wz, state, pos_err, bearing, bearing_cam, goal_bearing, dist,
+                 alpha, alpha_trusted, cycles, done=False, success=False, reason=None,
+                 bead=None):
+        self.vx, self.wz, self.state = vx, wz, state
+        self.pos_err, self.bearing, self.goal_bearing, self.dist = pos_err, bearing, goal_bearing, dist
+        self.bearing_cam = bearing_cam
+        # ビード位置 (x, y) を base_link 座標系で。**アームを向けるのはこの点。**
+        # 到達誤差がそのまま入っているので、下流は「決め打ち角度」ではなく
+        # この点を見て関節角を出せる（マーカーを見失っている周期は None）。
+        self.bead = bead
+        self.alpha, self.alpha_trusted, self.cycles = alpha, alpha_trusted, cycles
+        self.done, self.success, self.reason = done, success, reason
+
+
+class TurnDriveTurn:
+    """turn-drive-turn の状態機械。入力はすべて base_link 座標系。
+
+    使い方: `start(now)` してから毎周期 `step(now, mx, my, gamma_obs, ambiguity)`。
+    `gamma_obs` はマーカー面の法線（ロボット側を向くよう符号を揃えたもの）の方位[rad]。
+    観測できていなければ None。
+    """
+
+    TURN_TO_GOAL = 'ゴールへ旋回'
+    DRIVE = '直進'
+    FINAL_TURN = '正対へ旋回'
+    CHECK = '測り直し'
+    SETTLE = '静止待ち'
+    DONE = '完了'
+
+    def __init__(self, params=None):
+        self.p = params or Params()
+        self.events = []          # (時刻, 状態, 理由) 遷移の記録。検証とログに使う
+        self._reset_state()
+
+    def _reset_state(self):
+        self.state = self.TURN_TO_GOAL
+        self.next_state = None
+        self.settle_until = 0.0
+        self.still_hist = []          # 静止待ち中の (観測時刻, mx, my)。静止の判定に使う
+        self.still_seen = False       # この静止待ちで静止を一度でも確認したか
+        self.last_obs_time = None     # 同じ観測を二重に数えないため
+        self.stationary = False       # 直近の step で静止とみなしたか（ログ用）
+        self.turn_toward_marker = False   # ゴールへの旋回がマーカーを視野へ戻す向きか
+        self.cycles = 0
+        self.drive_dir = 1
+        self.cycle_start_err = None   # 周の開始時のゴール誤差。進んでいるかの判定に使う
+        self.abort_reason = None      # 打ち切りが決まったが、まだ正対に向き直していない
+        self.alpha = 0.0
+        self.alpha_trusted = False
+        self.done = False
+        self.success = False
+        self.reason = None
+
+    def marker_loss_tolerable(self):
+        """マーカーを見失っても `final_lost_timeout` までは止めなくてよい区間か。
+
+        静止待ち（機体に動く指令を出していない）と正対旋回（最後に見えた方位へ回す＝
+        マーカーを視野へ戻す向き）。直進は古い観測で動くとどこへ行くか分からないので含めない。
+
+        **ゴールへの旋回も、マーカーのいる側へ回しているときは含める（2026-09-28）。**
+        視野の端（カメラ方位33度超）で直進を切ると、停止の惰性で視野から出ることがある。
+        続くゴールへの旋回は目標がカメラ方位±25度に切り詰められているので、この場合は
+        必ずマーカーを視野へ戻す向きになる（正対旋回と同じ状況）。含めていなかったため、
+        戻す向きに回り始める前に「見失った」で落ちていた（sim の無作為400本中17本）。
+        ゴール側（マーカーを視野の外へ押す向き）へ回すときは含めない。
+        """
+        if self.state == self.TURN_TO_GOAL:
+            return self.turn_toward_marker
+        return self.state in (self.SETTLE, self.FINAL_TURN)
+
+    def start(self, now):
+        self._reset_state()
+        self.events = [(now, self.state, '開始')]
+        # **最初に静止して法線を測ってから計画する。** alpha は静止中しか観測しないので、
+        # いきなり計画すると視線基準で直進を決め、直後に法線が確定してゴールが
+        # 跳び、「1周で縮まらない」で打ち切っていた（2026-09-24、sim の近め1.0m・斜め15度）
+        self._settle(now, self.TURN_TO_GOAL, '開始時に静止して法線を測る')
+
+    # ---- 法線（alpha）の推定 ----
+
+    def update_alpha(self, gamma_obs, bearing, ambiguity, stationary=True):
+        """静止中で、曖昧性が十分なときだけ alpha を更新する（指数移動平均）。
+
+        alpha = (法線の向き) - (マーカーからロボットへ向かう視線の向き)。
+        その場旋回では bearing と法線が同じだけ回るので alpha は不変。
+        """
+        if gamma_obs is None or ambiguity < self.p.min_ambiguity or not stationary:
+            return
+        a_obs = wrap(gamma_obs - (bearing + math.pi))
+        if not self.alpha_trusted:
+            self.alpha = a_obs
+        else:
+            self.alpha = wrap(self.alpha + self.p.normal_alpha * wrap(a_obs - self.alpha))
+        self.alpha_trusted = True
+
+    # ---- 幾何 ----
+
+    def goal(self, mx, my, use_normal=None):
+        """マーカー方位と、ゴール点（法線上のstandoff点）を base_link 座標系で返す。
+
+        法線は毎周期、その時点の視線方向から alpha を使って**再構成する**。
+        保持したベクトルを回転させると、更新が止まっている間に劣化する。
+        """
+        bearing = math.atan2(my, mx)
+        use_normal = self.p.use_normal if use_normal is None else use_normal
+        use_alpha = self.alpha_trusted and use_normal
+        n_dir = bearing + math.pi + (self.alpha if use_alpha else 0.0)
+        gx = mx + math.cos(n_dir) * self.p.standoff
+        gy = my + math.sin(n_dir) * self.p.standoff
+        return bearing, gx, gy
+
+    def bead(self, mx, my):
+        """ビード位置を base_link 座標系で返す。**アームを向けるのはこの点。**
+
+        ゴール（撮影位置）に立ったとき機体がマーカーを向くので、そのときの機体の前方は
+        「ゴール→マーカー」の向きになる。ビードはその前方 bead_forward・右 bead_right。
+        いま機体がゴールに居なくても、**観測したマーカー姿勢から毎周期この点を出せる**ので、
+        到達誤差がそのままビード位置の誤差として下流（アーム）へ渡る。
+        """
+        # **視線接近でも法線上の撮影位置を基準にする（2026-09-24 実機で発覚）。**
+        # ビードはスタンドの法線を基準に置いてあるので、機体がどこを狙って寄ったかとは
+        # 関係ない。視線接近のゴールで計算していたため、法線から20度ずれて止まった本で
+        # 右0.388mと出したが、巻尺で測った実際の位置は右約0.575m（届く上限0.55mの外）だった。
+        bearing, gx, gy = self.goal(mx, my, use_normal=True)
+        # ゴールに立ったときの機体の向き（ゴールからマーカーを見る向き）
+        th = math.atan2(my - gy, mx - gx)
+        c, sn = math.cos(th), math.sin(th)
+        # 右は -y 方向（REP-103）
+        bx = gx + c * self.p.bead_forward + sn * self.p.bead_right
+        by = gy + sn * self.p.bead_forward - c * self.p.bead_right
+        return bx, by
+
+    # ---- 遷移 ----
+
+    def _settle(self, now, next_state, reason):
+        self.state = self.SETTLE
+        self.next_state = next_state
+        self.settle_until = now + self.p.settle_time
+        self.still_hist = []
+        self.still_seen = False
+        self.events.append((now, next_state, reason))
+
+    def _observe_still(self, now, mx, my, fresh, obs_time):
+        """静止待ち中の観測を窓に積み、いま静止しているかを返す。
+
+        静止 = 直近 still_window 秒のマーカー位置の振れ幅（x・yそれぞれの最大-最小）が
+        still_tolerance 未満。窓が still_window の8割以上を覆い、still_min_samples 枚以上
+        あるときだけ判定する（観測が途切れた窓で「止まっている」と言わない）。
+        """
+        p = self.p
+        if self.state != self.SETTLE:
+            return False
+        if fresh and (obs_time is None or obs_time != self.last_obs_time):
+            self.still_hist.append((now if obs_time is None else obs_time, mx, my))
+            self.last_obs_time = obs_time
+        self.still_hist = [h for h in self.still_hist if h[0] >= now - p.still_window]
+        h = self.still_hist
+        if len(h) < p.still_min_samples or h[-1][0] - h[0][0] < 0.8 * p.still_window:
+            return False
+        xs = [e[1] for e in h]
+        ys = [e[2] for e in h]
+        still = (max(xs) - min(xs) < p.still_tolerance
+                 and max(ys) - min(ys) < p.still_tolerance)
+        if still:
+            self.still_seen = True
+        return still
+
+    def _abort(self, now, reason, bearing):
+        """打ち切りを決める。**ただし、その前に必ずマーカーへ向き直す。**
+
+        ゴールに寄れないまま終わるとしても、機体はマーカーを正面に入れた状態で
+        止まっていなければならない（次の手を打つのも、人が見て判断するのもそこから）。
+        向き直さずに終えると、ゴールを向いたまま最大18度ずれて止まる（実装当初の不具合）。
+        """
+        self.abort_reason = reason
+        if abs(bearing) > self.p.ang_tolerance:
+            self.state = self.FINAL_TURN
+            self.events.append((now, self.state, f'{reason} → 先に正対へ向き直す'))
+        else:
+            self._finish(now, False, reason)
+
+    def _alpha_note(self):
+        """報告文に付ける法線ずれ。**視線接近ではこれがそのまま残る**ので必ず出す。"""
+        if not self.alpha_trusted:
+            return ''
+        return f'法線ずれ {math.degrees(self.alpha):+.1f}度、'
+
+    def _finish(self, now, success, reason):
+        self.state = self.DONE
+        self.done = True
+        self.success = success
+        self.reason = reason
+        self.events.append((now, self.DONE, reason))
+
+    # ---- 本体 ----
+
+    def turn_target(self, goal_bearing, bearing_cam):
+        """その場旋回で回す角度[rad]。ゴール方位を、マーカーを視野に残せる範囲へ切り詰める。
+
+        ゴール方位が範囲の外にあるときは「マーカーを画面に戻す向き」の値になる。
+        絶対値が turn_tolerance 以下なら旋回の必要がない（＝旋回しても得がない）。
+        """
+        return clamp(goal_bearing,
+                     bearing_cam - self.p.fov_budget, bearing_cam + self.p.fov_budget)
+
+    def bearing_from_camera(self, mx, my):
+        """カメラ座標系でのマーカー方位。**視野の判定はこれで行う**（base_linkではない）。"""
+        return math.atan2(my - self.p.camera_y, mx - self.p.camera_x)
+
+    def step(self, now, mx, my, gamma_obs, ambiguity, obs_time=None):
+        """1周期進める。
+
+        `obs_time` はマーカー観測の時刻。**呼び出し側が同じ観測を周期ごとに渡し直す場合は
+        必ず渡すこと**（制御周期20Hzに対しカメラは約14fps）。渡し直した古い値を
+        新しい観測として積むと、位置が変わらないので「静止している」と誤判定する。
+        `gamma_obs` が None の周期（見失い中）は観測として積まない。
+        """
+        p = self.p
+        bearing, _, _ = self.goal(mx, my)
+        stationary = self._observe_still(now, mx, my, gamma_obs is not None, obs_time)
+        self.stationary = stationary
+        was_trusted = self.alpha_trusted
+        self.update_alpha(gamma_obs, bearing, ambiguity, stationary)
+        if self.alpha_trusted and not was_trusted:
+            # ゴールの基準が視線から法線へ切り替わった。切り替わる前の誤差を
+            # 1周の起点にすると「縮まらない」と誤判定して打ち切る
+            self.cycle_start_err = None
+        bearing, gx, gy = self.goal(mx, my)          # alpha更新後の値で決める
+        pos_err = math.hypot(gx, gy)
+        goal_bearing = math.atan2(gy, gx)
+        bearing_cam = self.bearing_from_camera(mx, my)
+        dist = math.hypot(mx, my)
+        if self.cycle_start_err is None:
+            self.cycle_start_err = pos_err
+
+        vx = wz = 0.0
+        # 遷移が連鎖する（SETTLE明け→CHECK→TURN など）ので、同一周期内で数回まわす
+        for _ in range(6):
+            if self.state == self.DONE:
+                break
+
+            if self.state == self.SETTLE:
+                if now < self.settle_until:
+                    break
+                # 静止を確認できるまで延ばす。**マーカーが見えているときだけ**。
+                # 停止の惰性で視野から出ると確認のしようがなく、待つほど見失いの
+                # 猶予を食うだけになる（sim の斜め20度で、延ばした末に見失ったまま
+                # 次の区間へ移ろうとして落ちた）。
+                if not self.still_seen:
+                    if self.still_hist and now < self.settle_until + p.still_max_extra:
+                        break
+                    self.events.append((now, self.next_state,
+                                        '静止を確認できないまま進む（'
+                                        + (f'+{p.still_max_extra:.1f}秒延ばした' if self.still_hist
+                                           else 'マーカーが見えていない')
+                                        + '。この静止待ちでは alpha を更新していない）'))
+                self.state, self.next_state = self.next_state, None
+                continue
+
+            if self.state == self.CHECK:
+                arrived = pos_err <= p.pos_tolerance and abs(bearing) <= p.ang_tolerance
+                if self.abort_reason is not None and not arrived:
+                    # 打ち切りは決まっている。正対に向き直したあとの値で報告する
+                    self._finish(now, False,
+                                 f'{self.abort_reason}'
+                                 f'（位置誤差 {pos_err * 1000:.0f}mm、'
+                                 f'方位 {math.degrees(bearing):+.1f}度、'
+                                 f'{self._alpha_note()[:-1]}）')
+                    continue
+                # **打ち切りを決めたあとでも、向き直した結果が許容内なら到達である。**
+                # 打ち切りの判定は「1周で縮まらない」等で下すが、その直後に入る
+                # 正対旋回で方位が許容内に入ることがある。判定を向き直す前の値で
+                # 確定させていたため、位置58mm・方位-4.0度（どちらも許容内）で
+                # 止まっているのに失敗と報告していた（2026-09-08、Gazeboで発覚）。
+                if arrived and self.abort_reason is not None:
+                    self.abort_reason = None
+                if arrived:
+                    self._finish(now, True,
+                                 f'到達しました（位置誤差 {pos_err * 1000:.0f}mm、'
+                                 f'方位 {math.degrees(bearing):+.1f}度、'
+                                 f'{self._alpha_note()}{self.cycles + 1}周目）')
+                elif self.cycles + 1 >= p.max_cycles:
+                    self._abort(now, f'繰り返し上限 {p.max_cycles} 回で打ち切り', bearing)
+                elif self.cycle_start_err - pos_err < p.min_progress:
+                    # 折れ線で刻んでも届かない配置がある（法線から大きくずれた至近距離）。
+                    # 視野の外へ動く必要があるので、粘っても近づけない。
+                    self._abort(now, f'1周で {(self.cycle_start_err - pos_err) * 1000:.0f}mm しか'
+                                     '縮まらないため打ち切り。'
+                                     'マーカーを視野に残せる範囲では、ここより法線に寄れない',
+                                bearing)
+                else:
+                    self.cycles += 1
+                    self.cycle_start_err = pos_err
+                    self.state = self.TURN_TO_GOAL
+                    self.events.append((now, self.state,
+                                        f'残差 {pos_err * 1000:.0f}mm。{self.cycles + 1}周目へ'))
+                continue
+
+            if self.state == self.TURN_TO_GOAL:
+                if pos_err <= p.pos_tolerance:
+                    self._settle(now, self.FINAL_TURN, 'すでにゴール圏内')
+                    continue
+                if abs(goal_bearing) > math.pi / 2:
+                    # ゴールが背後。振り向くとマーカーを見失うので、向きを変えずに後退する
+                    self.drive_dir = -1
+                    self._settle(now, self.DRIVE, 'ゴールが背後にあるため後退する')
+                    continue
+                target = self.turn_target(goal_bearing, bearing_cam)
+                if abs(target) <= max(p.turn_tolerance, p.turn_lead_angle):
+                    self.drive_dir = 1
+                    self._settle(now, self.DRIVE,
+                                 f'ゴール方位 {math.degrees(goal_bearing):+.1f}度'
+                                 f'（カメラ方位 {math.degrees(bearing_cam):+.1f}度）。直進に移る')
+                    continue
+                wz = math.copysign(clamp(p.k_yaw * abs(target), p.min_wz, p.max_wz), target)
+                self.turn_toward_marker = target * bearing_cam > 0
+                break
+
+            if self.state == self.DRIVE:
+                along = gx * self.drive_dir       # 進行方向に残っている距離
+                if along <= p.stop_lead_distance:
+                    if pos_err <= p.pos_tolerance:
+                        self._settle(now, self.FINAL_TURN, 'ゴールに到達。正対に移る')
+                    else:
+                        self._settle(now, self.CHECK,
+                                     f'直進を終了（横に {abs(gy) * 1000:.0f}mm 残）')
+                    continue
+                if self.drive_dir > 0 and pos_err > p.pos_tolerance:
+                    if abs(bearing_cam) > p.drive_bearing_limit:
+                        # 弦を進むとマーカーの方位は単調に増える。視野を使い切る前に切る
+                        self._settle(now, self.CHECK,
+                                     f'マーカーのカメラ方位が {math.degrees(bearing_cam):+.1f}度'
+                                     'まで開いた（視野の限界に近い）')
+                        continue
+                    # ゴール方位がずれていても、**旋回で縮められるときだけ**切り直す。
+                    # 視野の予算のためにあえてゴールから外している向きを「ずれている」と
+                    # 判定して切ると、旋回と直進を往復して1mmも進まなくなる（実装当初の不具合）。
+                    if abs(self.turn_target(goal_bearing, bearing_cam)) > p.redirect_tolerance:
+                        self._settle(now, self.CHECK,
+                                     f'ゴール方位が {math.degrees(goal_bearing):+.1f}度まで開き、'
+                                     '旋回で縮められる')
+                        continue
+                vx = self.drive_dir * clamp(p.k_x * along, p.min_translation_speed, p.max_vx)
+                break
+
+            if self.state == self.FINAL_TURN:
+                if abs(bearing) <= max(p.ang_tolerance, p.turn_lead_angle):
+                    self._settle(now, self.CHECK, '正対した')
+                    continue
+                wz = math.copysign(clamp(p.k_yaw * abs(bearing), p.min_wz, p.max_wz), bearing)
+                break
+
+            raise RuntimeError(f'未知の状態: {self.state}')
+
+        return Command(vx, wz, self.state, pos_err, bearing, bearing_cam, goal_bearing, dist,
+                       self.alpha, self.alpha_trusted, self.cycles,
+                       self.done, self.success, self.reason,
+                       bead=None if gamma_obs is None else self.bead(mx, my))

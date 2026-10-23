@@ -55,6 +55,6 @@
       #   - ここ(body_exclude_min/max_x/y)
       #   - height_slice_viz.pyのdeclare_parameterデフォルト値
       body_exclude_min_x: -0.38
-      body_exclude_max_x: 0.35
+      body_exclude_max_x: 0.37
       body_exclude_min_y: -0.18
       body_exclude_max_y: 0.18
