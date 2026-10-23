@@ -1,0 +1,17 @@
+# sim イメージ専用の除外リスト。
+#
+# sim のビルドコンテキストは driver と同じリポジトリルート(docker/sim/compose.yaml の
+# `context: ../..`)。BuildKit は `<Dockerfileのパス>.dockerignore` があればルートの
+# .dockerignore の代わりにそれを使うので、このファイルは sim のビルドにしか影響しない
+# (BuildKit が無いときはルートの .dockerignore が使われる。そちらの冒頭参照)。
+#
+# **`external/go2_ros2_sim_py` は除外しないこと。** sim はまさにそれを COPY する
+# (driver 用の除外リストと共有して "not found" で壊れたことがある。2026-09-08)。
+.git
+chapter1
+# sim が使うのは external/go2_ros2_sim_py だけ。実機用の2つは送らない
+external/unitree_ros2
+external/unitree_sdk2
+ros2_ws/build
+ros2_ws/install
+ros2_ws/log
