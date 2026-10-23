@@ -29,6 +29,9 @@ services:
       # 読み取り専用。ビルドはせず PYTHONPATH で読む（pure python なので通る）。
       - ../../ros2_ws:/ros2_ws:ro
       - ./tools:/sim_tools:ro
+      # 実機用の撮影ツール(tools/inspection)。sim_inspect_full.sh で、実機と同じ inspect_run.py を
+      # このコンテナの中だけで通す(docker/sim/tools/inspect_sim.sh、#83)。読み取り専用
+      - ../../tools/inspection:/inspection:ro
     devices:
       - /dev/dri:/dev/dri
     # SIM_ENABLE_NAV2=false でupstream Nav2スタックを起動しない(GATE1計測用、Issue #35)。
