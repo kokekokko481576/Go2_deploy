@@ -93,6 +93,12 @@ COPY external/go2_ros2_sim_py /root/ws/src
 # unitree_hg は不要。driverイメージと同じ submodule から取る
 COPY external/unitree_ros2/cyclonedds_ws/src/unitree/unitree_go /root/ws/src/unitree/unitree_go
 COPY external/unitree_ros2/cyclonedds_ws/src/unitree/unitree_api /root/ws/src/unitree/unitree_api
+# Jazzy には rosidl_generator_dds_idl(Connext用のDDS IDL生成)が無く、そのままだとCMakeが失敗する。
+# 使うのはROS 2のメッセージ型だけなので、コピー側のCMakeLists.txtからこの生成だけを外す(submoduleは触らない)
+RUN for p in unitree_go unitree_api; do \
+      perl -0pi -e 's/find_package\(rosidl_generator_dds_idl REQUIRED\)\n//; s/rosidl_generate_dds_interfaces\(.*?\n\)\nadd_dependencies\(.*?\n\)\n//s' \
+        /root/ws/src/unitree/$p/CMakeLists.txt; \
+    done
 
 WORKDIR /root/ws
 
