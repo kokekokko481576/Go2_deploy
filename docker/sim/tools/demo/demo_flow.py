@@ -3,7 +3,7 @@
 
     マーカー接近（approach_node） → 伏せる → アーム展開 → 手首を振って3枚撮影 → 収納 → 起立
 
-実機の inspect_run.py と同じ姿勢（/marker_detection/tools/inspect_poses.json の lie）を使う。
+実機の inspect_run.py と同じ姿勢（/inspection/inspect_poses.json の lie）を使う。
 実機との違い（sim の都合）:
   - 伏せる: sim の脚制御には伏せる命令がないので、STAND モードで体を約12cmゆっくり下げる
     （robot_mode=STAND ＋ cmd_vel.linear.z。cmd_vel_pub が z をそのまま robot_velocity へ渡す）
@@ -30,7 +30,7 @@ from std_msgs.msg import Bool, Float64MultiArray, String
 
 from quadropted_msgs.msg import RobotModeCommand
 
-POSES = '/marker_detection/tools/inspect_poses.json'
+POSES = '/inspection/inspect_poses.json'
 ARM_JOINTS = ['d1_joint1', 'd1_joint2', 'd1_joint3', 'd1_joint4', 'd1_joint5', 'd1_joint6', 'd1_joint_l', 'd1_joint_r']
 ARM_SPEED = math.radians(40.0)   # rad/s
 SHOT_DIR = '/tmp/demo_shots'

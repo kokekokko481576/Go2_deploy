@@ -18,8 +18,7 @@
 | RealSense の撮影 `rs_snap`（Jetson 側でビルド） | Jetson の `~/riku_rs/`（`rs_snap_install.sh` で入れる） |
 | ログ・写真の保存先 | `~/marker_detection/logs/` |
 
-sim の通し試験（`sim_world_node.py`・`sim_inspect_layout.py`）は、同じディレクトリに
-`sim_approach.py`（このリポジトリでは `ros2_ws/src/marker_approach/tools/`）がある前提。
+**sim の通し試験は、この前提に関係なく go2-sim コンテナだけで動く**（下記「sim での確認」。#83）。
 
 ## ファイル
 
@@ -82,6 +81,23 @@ cd ~/d1_sdk/build && cmake .. && make set_joints arm_server
 （`set_joints` が既にあるなら1行目の `add_executable` は不要）
 
 ### sim での確認
+
+#### コンテナだけで（推奨。ホームの環境もホストの ROS も要らない）
+
+```bash
+cd docker/sim && docker compose build                # 初回と Dockerfile 変更後のみ
+docker/sim/tools/inspect_sim.sh                      # 既定。Gazebo は起動しない（数十秒）
+POSTURE=stand docker/sim/tools/inspect_sim.sh        # 立ったままアーム
+SIM_RENDER=1 SIM_ROOT_DY=0.06 INSPECT_ARGS="--aim-correct" docker/sim/tools/inspect_sim.sh
+SIM_OUT_HOST=~/inspect_sim_out docker/sim/tools/inspect_sim.sh   # 記録をホストに残す
+```
+
+実機と同じ `approach_node` と `inspect_run.py` を、go2-sim コンテナ（Jazzy）の中で動かす。
+代役は機体・検出器・温度（`sim_world_node.py`）、アーム（`sim_fakes/d1_fake.py`）、撮影（`sim_fakes/rs_snap_fake.sh`）。
+`inspect_run.py` が使う `unitree_go`・`unitree_api` のメッセージは、sim イメージに入れてある（`docker/sim/Dockerfile`）。
+終了コードが 0 で、`== 真値（仮想世界）:` の `along`/`lateral` が小さければ通っている。
+
+#### ホーム側の環境で（従来どおり）
 
 ```bash
 ./sim_inspect_full.sh                                                  # 既定

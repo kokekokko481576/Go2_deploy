@@ -61,6 +61,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     ros-jazzy-tf2-ros \
     ros-jazzy-tf2 \
     python3-colcon-common-extensions \
+    fonts-noto-cjk \
     tree \
     htop \
     tmux \
@@ -87,6 +88,18 @@ RUN curl -sS https://starship.rs/install.sh | sh -s -- --yes
 # go2_ros2_sim_py 本体(submodule)をワークスペースへ。colcon-cacheを使わないため
 # submodule内の .git (gitlink、コンテナ内では無効な参照になる)が含まれても実害はない
 COPY external/go2_ros2_sim_py /root/ws/src
+
+# 実機用ツール(tools/inspection/inspect_run.py)がsimでも同じコードで動くよう、
+# unitree_go / unitree_api のメッセージ定義(rosidlのみ・geometry_msgsにだけ依存)を入れる(#83)。
+# unitree_hg は不要。driverイメージと同じ submodule から取る
+COPY external/unitree_ros2/cyclonedds_ws/src/unitree/unitree_go /root/ws/src/unitree/unitree_go
+COPY external/unitree_ros2/cyclonedds_ws/src/unitree/unitree_api /root/ws/src/unitree/unitree_api
+# Jazzy には rosidl_generator_dds_idl(Connext用のDDS IDL生成)が無く、そのままだとCMakeが失敗する。
+# 使うのはROS 2のメッセージ型だけなので、コピー側のCMakeLists.txtからこの生成だけを外す(submoduleは触らない)
+RUN for p in unitree_go unitree_api; do \
+      perl -0pi -e 's/find_package\(rosidl_generator_dds_idl REQUIRED\)\n//; s/rosidl_generate_dds_interfaces\(.*?\n\)\nadd_dependencies\(.*?\n\)\n//s' \
+        /root/ws/src/unitree/$p/CMakeLists.txt; \
+    done
 
 WORKDIR /root/ws
 

@@ -15,31 +15,61 @@
 #   INSPECT_ARGS="--fast-path" tools/sim_inspect_full.sh   # inspect_run.py に足す引数
 #   D1_FAKE_DROP=1 tools/sim_inspect_full.sh        # アームの代役が最初の指令を捨てる（届かない再現）
 #   SIM_RENDER=1 SIM_ROOT_DY=0.06 INSPECT_ARGS="--aim-correct" tools/sim_inspect_full.sh   # 撮影位置の補正（部材を6cm遠くに）
+#
+# 動く場所は2通り（/opt/ros/jazzy があるかで自動判定）:
+#   - go2-sim コンテナの中（Jazzy。リポジトリだけで動く。docker/sim/tools/inspect_sim.sh から呼ぶ。#83）
+#   - ホーム側の環境（Humble + ~/marker_detection。従来どおり）
+# 出力先は SIM_OUT で変えられる。
 set -u
 DIST=${1:-1.3}; LAT=${2:-0.0}; YAW=${3:-0.0}; SEED=${4:-0}
 USE_NORMAL=${USE_NORMAL:-false}
 HERE=$(cd "$(dirname "$0")" && pwd)
-OUT=$HOME/marker_detection/logs/sim
-mkdir -p "$OUT"
+if [ -f /opt/ros/jazzy/setup.bash ]; then IN_CONTAINER=1; else IN_CONTAINER=0; fi
+if [ "$IN_CONTAINER" = 1 ]; then
+  : "${SIM_OUT:=/tmp/inspect_sim}"
+  # リポジトリ（compose.yaml がマウント）の中のものだけで動かす。home側の marker_detection には依存しない
+  APPROACH_PKG=${APPROACH_PKG:-/ros2_ws/src/marker_approach}
+  export PYTHONPATH="$APPROACH_PKG:$APPROACH_PKG/tools:${PYTHONPATH:-}"
+  : "${RS_OUT:=$SIM_OUT/rs}"
+  INSPECT_LOG_DIR=${INSPECT_LOG_DIR:-$SIM_OUT/inspect_logs}
+else
+  : "${SIM_OUT:=$HOME/marker_detection/logs/sim}"
+  : "${RS_OUT:=$HOME/marker_detection/logs/rs}"
+  INSPECT_LOG_DIR=${INSPECT_LOG_DIR:-$HERE/../logs}
+fi
+export RS_OUT INSPECT_LOG_DIR
+OUT=$SIM_OUT
+mkdir -p "$OUT" "$RS_OUT" "$INSPECT_LOG_DIR"
 TAG=$(date +%m%d_%H%M%S)
 RES=$OUT/full_${TAG}.json
 export D1_FAKE_STATE=$OUT/d1_fake_state_${TAG}.json
 
 set +u
-source /opt/ros/humble/setup.bash
-source "$HOME/unitree_ros2/install/setup.bash" 2>/dev/null || source "$HOME/unitree_ros2/cyclonedds_ws/install/setup.bash"
-source "$HOME/marker_detection/ros2_ws/install/setup.bash"
+if [ "$IN_CONTAINER" = 1 ]; then
+  source /opt/ros/jazzy/setup.bash
+  source "${WORKSPACE_DIR:-/root/ws}/install/setup.bash"
+else
+  source /opt/ros/humble/setup.bash
+  source "$HOME/unitree_ros2/install/setup.bash" 2>/dev/null || source "$HOME/unitree_ros2/cyclonedds_ws/install/setup.bash"
+  source "$HOME/marker_detection/ros2_ws/install/setup.bash"
+fi
 set -u
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export ROS_DOMAIN_ID=77 ROS_LOCALHOST_ONLY=1
 unset CYCLONEDDS_URI
+
+if [ "$IN_CONTAINER" = 1 ]; then
+  APPROACH_CMD=(python3 -m marker_approach.approach_node)
+else
+  APPROACH_CMD=("$HOME/marker_detection/ros2_ws/install/marker_approach/lib/marker_approach/approach_node")
+fi
 
 pids=()
 cleanup() {
   for p in "${pids[@]}"; do kill -INT "$p" 2>/dev/null; done
   sleep 1
   for p in "${pids[@]}"; do kill -9 "$p" 2>/dev/null; done
-  rm -f "$D1_FAKE_STATE" "$HOME"/marker_detection/logs/rs/simfull_*_{color.png,depth.pgm,info.txt,root.png}
+  rm -f "$D1_FAKE_STATE" "$RS_OUT"/simfull_*_{color.png,depth.pgm,info.txt,root.png}
 }
 trap cleanup EXIT
 
@@ -49,7 +79,7 @@ python3 "$HERE/sim_world_node.py" --dist "$DIST" --lat "$LAT" --yaw "$YAW" --see
 pids+=($!)
 # approach_real.launch.py と同じ設定（camera_x/z、turn_lead 6.9、settle 0.7）
 # ros2 run 経由だと、止めるときに ros2 run だけが死んでノードが残る（実際に8本残った）。直接起動する
-"$HOME/marker_detection/ros2_ws/install/marker_approach/lib/marker_approach/approach_node" --ros-args \
+"${APPROACH_CMD[@]}" --ros-args \
   -p dry_run:=false -p standoff:=0.65 -p use_normal:=$USE_NORMAL -p settle_time:=0.7 \
   -p camera_x:=0.333 -p camera_y:=0.0 -p camera_z:=0.035 -p camera_pitch_deg:=0.0 \
   -p turn_lead_angle_deg:=6.9 -p trace_csv:="$OUT/trace_${TAG}.csv" \
@@ -62,7 +92,7 @@ python3 "$HERE/inspect_run.py" --approach marker --posture "${POSTURE:-lie}" --a
   --d1-run "$HERE/sim_fakes/d1_fake.py" --rs-snap "$HERE/sim_fakes/rs_snap_fake.sh" ${INSPECT_ARGS:-} </dev/null
 rc=$?
 # 実機の記録（logs/inspect_*.log）と混ざらないよう、今回の記録を logs/sim へ移す
-last=$(ls -t "$HOME"/marker_detection/logs/inspect_*.log 2>/dev/null | head -1)
+last=$(ls -t "$INSPECT_LOG_DIR"/inspect_*.log 2>/dev/null | head -1)
 [ -n "$last" ] && grep -q "name simfull\|simfull" "$last" && mv "$last" "$OUT/inspect_sim_${TAG}.log"
 echo
 echo "== inspect_run の終了コード: $rc"

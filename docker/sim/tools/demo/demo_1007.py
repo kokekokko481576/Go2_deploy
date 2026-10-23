@@ -28,10 +28,10 @@ from std_msgs.msg import Bool, Float64MultiArray, String
 
 from quadropted_msgs.msg import RobotModeCommand
 
-sys.path.insert(0, '/marker_detection/tools')
+sys.path.insert(0, '/inspection')
 import aim_correct  # noqa: E402
 
-POSES = '/marker_detection/tools/inspect_poses.json'
+POSES = '/inspection/inspect_poses.json'
 OLD_STOW = [68.7, -89.3, 91.1, 0, 0, 0]
 ARM_JOINTS = ['d1_joint1', 'd1_joint2', 'd1_joint3', 'd1_joint4', 'd1_joint5', 'd1_joint6', 'd1_joint_l', 'd1_joint_r']
 ARM_SPEED = math.radians(40.0)
