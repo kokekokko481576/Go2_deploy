@@ -45,6 +45,17 @@ tools/demo/run_demo_1007.sh       # 出力: $DEMO_OUT/Go2_sim_1007_<日時>.mp4�
 - **sim の機体が前に約29度傾いたまま戻らなくなることがある**（体を下げ続けた・途中で落ちた回のあと）。
   機体の位置を戻しても直らないので `docker compose restart` する
 
+## 10/9 版（横一線スイープ）
+
+```bash
+tools/demo/run_demo_sweep.sh      # 出力: $DEMO_OUT/Go2_sim_sweep_<日時>.mp4
+```
+
+`sweep_demo.py`・`recorder_sweep.py` を使う。10/7版の③と同じやり方（アーム先端の深度カメラ→
+`aim_correct.py`の補正）を、`inspect_poses.json` の `lie.sweep`（4点）に適用する。各点で試し撮り→
+根元を探す→直す→合えば本撮影、を4点くり返す（`inspect_run.py --sweep --aim-correct` と同じロジック）。
+`--prepare`や秒数指定には対応していない。部材はずらさず既定位置に置く。
+
 ## ファイル
 
 | ファイル | 役割 |
@@ -54,6 +65,7 @@ tools/demo/run_demo_1007.sh       # 出力: $DEMO_OUT/Go2_sim_1007_<日時>.mp4�
 | `demo_flow.py` | 接近 → 伏せ → アーム → 撮影 → 収納 → 起立を進める。今の段階を `/demo_status` に出す |
 | `recorder.py` | カメラ画像と `/demo_status` から動画を合成する |
 | `grab_image.py` / `look_at.py` | カメラ位置合わせ用の補助 |
+| `sweep_demo.py` / `recorder_sweep.py` | 10/9版（横一線スイープ、`run_demo_sweep.sh`） |
 
 ## sim と実機の違い
 
