@@ -55,7 +55,7 @@ class Demo(Node):
         self.create_subscription(JointState, '/robot1/joint_states', self.on_js, 10)
         self.create_subscription(Image, '/robot1/arm_cam/image', lambda m: setattr(self, 'arm_img', m), 2)
         self.create_subscription(Image, '/robot1/arm_cam/depth_image', lambda m: setattr(self, 'arm_depth', m), 2)
-        self.create_subscription(CameraInfo, '/robot1/arm_cam/color/camera_info',
+        self.create_subscription(CameraInfo, '/robot1/arm_cam/camera_info',
                                  lambda m: setattr(self, 'cam_k', list(m.k)), 2)
         self.create_subscription(Log, '/rosout', self.on_log, 50)
         self.arm_cmd = None
