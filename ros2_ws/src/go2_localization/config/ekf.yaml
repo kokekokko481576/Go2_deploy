@@ -7,6 +7,12 @@
       sensor_timeout: 0.2
       two_d_mode: true
 
+      # 2026-11-04: cloud_deskewed検証中、height_slice_vizのTF参照が常に約3秒遅れで
+      # 「Lookup would require extrapolation into the future」エラーになる問題への対応。
+      # 既定false(未設定)だと、EKFは直近の入力の時刻までしかTFを出さない。trueにすると
+      # 入力が途切れていても現在時刻まで予測モデルで外挿してTFを出し続ける
+      predict_to_current_time: true
+
       # go2_path_following(追M2)のTF参照元として自前のTFを配信する。
       # upstream本家と衝突しないよう、出力先はlaunchファイルで/go2_localization/tfに
       # リマップしている(tf_staticはupstreamの静止TFを読み続けるだけなので変更不要)
