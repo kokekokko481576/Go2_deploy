@@ -1,0 +1,19 @@
+# RKO-LIO(lidar_slam_ros2)向けGo2用オーバーライド設定。
+# /utlidar/cloud_base_restampedの"time"フィールドは、各点がスキャン開始から経過した秒数
+# (スキャン内相対時刻、0〜約0.07s)。自動判定(heuristic)がこれをabsolute/relativeの
+# どちらとも判定できずクラッシュしたため、明示的にforce_relativeを指定する。
+/**:
+    ros__parameters:
+        lidar_timestamps.force_relative: true
+        # 部屋の規模(数m)に合わせてボクセル・距離レンジを既定値(voxel_size=1.0,
+        # min_range=1.0, max_range=100.0)から縮小。既定値のままだと対応点がほぼ常に0になり
+        # 発散直前で完全に追跡を失っていた(2026-11-11実測)
+        voxel_size: 0.1
+        min_range: 0.3
+        max_range: 15.0
+        # 追跡を見失った後、著者は既定で「停止して手動確認」を推奨しているが、今回はまず
+        # 自動復帰させてどこまで改善するか確認する目的でオンにする(2026-11-11、35.7m→3.75m
+        # まで改善を確認済み)。本番運用前に著者の警告(「尤もらしいが間違った姿勢に収束する
+        # ことがある」)を踏まえて要再検討
+        reset_on_registration_failure: true
+        enable_kidnap_relocalization: true
