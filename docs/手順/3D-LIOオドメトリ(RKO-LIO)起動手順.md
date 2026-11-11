@@ -4,14 +4,10 @@
 確認されてから」の条件が、2026-11-11の実機SLAM検証で満たされたことに伴う記録。
 2D AMCL/slam_toolbox自体の変更は行わず、3D LIOは別経路として追加検証した。
 
-**【2026-11-11追記・重要な訂正】** 本ドキュメント作成時点では「RKO-LIOで最大ドリフト
-3.75mまで改善、採用して進める」としていたが、これは誤りだった。軌跡を詳細確認した結果、
-**`online_node`は歩行開始から約7〜13秒(本格的な歩行動作=旋回+脚の接地衝撃が始まる
-タイミングと一致)で実質的に追跡を失い、以降は「開始点付近への無意味な再配置」を
-繰り返していただけ**と判明(3.75mはドリフト量ではなく再配置の着地点)。`voxel_size`を
-0.1→0.3に粗くして計算負荷を下げる対策も試したが、効果なし(むしろt=8〜25秒の間に
-91m規模のあり得ないジャンプが発生する、別の悪化パターンに変わった)。
-**現時点で「RKO-LIO採用」の結論は撤回し、採用判断は保留とする。** §2・§6を参照。
+**【2026-11-11・最終結論】** `enable_kidnap_relocalization`の扱いを巡って何度か訂正を
+重ねた後、**探索コストを抑えた再配置設定(v4)で採用**。バッグ全体(307.8秒)を通して
+初めて途切れずオドメトリが出続け、最終位置は開始点から0.05mまで改善した。完全解決では
+なく、残課題もある(§6)。経緯は§2.1に記録。
 
 ## 1. 背景(なぜ3D化を検証したか)
 
@@ -32,26 +28,42 @@ ping不安定・部屋・9月時点の設定差異は全て切り離し済み(�
 | 候補 | 結果 |
 |---|---|
 | Point-LIO(`dfloreaa/point_lio_ros2`) | 特徴の乏しい区間で発散。チューニング後も最良35.7mドリフト。**不採用** |
-| **RKO-LIO**(`rsasaki0109/lidar_slam_ros2`内) | ~~kidnap-relocalizationのみで最大ドリフト3.75mまで改善~~ **(撤回。下記参照)現時点では未解決** |
+| **RKO-LIO**(`rsasaki0109/lidar_slam_ros2`内) | v4設定で採用。バッグ全体を通して完走、最終誤差0.05m。**§2.1・§6参照** |
 
-**既知の制約(重要)**:
-- **`online_node`は、歩行開始から約7〜13秒(旋回+脚の接地衝撃を伴う本格的な歩行動作が
-  始まるタイミング)で実質的に追跡を失う。** 以降は「開始点付近への無意味な再配置」を
-  数秒おきに繰り返すだけで、残り区間はほぼ追跡できていない。当初報告した「最大ドリフト
-  3.75m」はこの誤りに基づく誤った評価だった(2026-11-11訂正)
-- 上記の原因調査で、追跡破綻と同時に`Registration lidar buffer limit reached.
-  Dropping oldest pending frame.`という警告が多発することを確認(約5分の走行で3,800回超)。
-  再生速度を0.3倍に落としても発生回数はほぼ変わらず、`voxel_size`を0.1→0.3に粗くしても
-  改善しない(むしろ別の悪化パターン=物理的にあり得ない大ジャンプが出る)。
-  再生速度非依存・パラメータ調整でも解決しない、より深い構造的な問題と見られる(未解明)
+### 2.1 原因調査の経緯(教訓として記録)
+
+1. **当初「最大ドリフト3.75m」と報告したが誤りだった**: 軌跡を詳細確認した結果、
+   `online_node`は歩行開始から約7〜13秒で実質的に追跡を失い、以降は「開始点付近への
+   無意味な再配置」を繰り返していただけ(3.75mはドリフト量ではなく再配置の着地点)。
+   `voxel_size`を0.1→0.3に粗くする対策も効果なし(むしろ91m規模のあり得ない
+   ジャンプが出る、別の悪化パターンに変化)
+2. **ソースコード調査で真因を特定**: 原因は`enable_kidnap_relocalization: true`
+   だった。追跡失敗時に呼ばれる`try_global_relocalization()`
+   (`Thirdparty/rko_lio/rko_lio/core/lio.cpp`)は、過去の全姿勢×複数yaw候補の二重ループで
+   候補ごとにフルICPを実行する、非常に重い処理。しかも**registration専用スレッドが
+   1本しかない**ため、この間新規フレームを一切処理できずバッファが溢れて古いフレームを
+   捨て続け、再配置完了時には溜まったフレームがさらに古くなって再び失敗する、という
+   無限ループ(バッファ暴走)に陥っていた。IMUギャップ警告(71件/約5分走行)もこの
+   処理遅延の副作用と確認(`lio.cpp`の`motion_priors_from_imu`で確認、bagデータ自体の
+   欠落ではない)
+3. **「無効化すれば直る」は誤りだった**: `enable_kidnap_relocalization: false`に
+   すると暴走は止まったが、代わりに**最初の1回の追跡失敗で以降ずっと復帰不能**に
+   なった(IMUのみのdead-reckoningで姿勢が二度とマッチしないレベルまでズレる)。
+   upstream RKO-LIOのGo2向け実戦設定例(`bench_report/data/grandtour/.../mgo2.yaml`、
+   `enable_kidnap_relocalization: false`)を丸ごと試しても、失敗数が全く同じ(3671件)
+   のまま変化せず、この構造を裏付けた
+4. **最終解決: 再配置はオンのまま、探索コストだけを約10分の1に削減**
+   (`relocalization_yaw_samples: 24→6`、`relocalization_pose_stride: 10→30`、
+   `relocalization_max_iterations: 15→8`)。voxel_size等の基本設定は
+   upstreamのGo2向け設定(`mgo2.yaml`、`bump_image_registration`=脚ロボット特有の
+   「平坦な地面での登録のすべり」対策込み)を採用。結果、**バッグ全体(307.8秒)を
+   通してオドメトリが途切れず出続け**、最終位置の誤差は0.05mまで改善(§6に残課題)
+
+**その他の既知の制約**:
 - `graph_based_slam_node`によるループクロージャは、今回の疎な顎LiDARデータでは
-  **全区間で1件も採用されなかった**(却下673件、採用0件)。同じ場所に戻ってもfitness
-  (マッチング適合度)自体は改善することがあるが、その場合は「補正量が0.5mを超える」
-  別の安全基準で却下され続ける。閾値緩和は未検証(著者は緩和に対し「尤もらしいが
-  間違った姿勢に収束する」リスクを警告している)
-- `/go2_state_bridge/imu`とLiDARスキャンの間でIMUメッセージが0件になる瞬間の警告
-  (71件/約5分走行)は、bagデータ自体の欠落ではなく上記のバッファ詰まりによる処理側の
-  副作用と確認済み(センサー・ブリッジ側の問題ではない)
+  **全区間で1件も採用されなかった**(却下673件、採用0件、v4設定とは別の検証時の結果)。
+  同じ場所に戻ってもfitness自体は改善することがあるが、その場合は「補正量が0.5mを
+  超える」別の安全基準で却下され続ける
 - RKO-LIOパッケージ一式は`ros2_ws`とは別の**独立したcolconワークスペース**
   (`~/lidarslam_ws/`、外部クローン10パッケージ)にある。`real_up.sh`には未組込み
 
@@ -69,56 +81,59 @@ cd ~/lidarslam_ws
 
 ## 4. パラメータファイル
 
-このGo2向けの上書き設定は本リポジトリにコミット済み:
+このGo2向けの上書き設定(v4、採用版)は本リポジトリにコミット済み:
 `ros2_ws/src/go2_localization/config/rko_lio_go2.yaml`
 
 要点(詳細な理由はファイル内コメント参照):
 - `lidar_timestamps.force_relative: true` — `/utlidar/cloud_base_restamped`の
   `time`フィールド(スキャン内相対時刻)を自動判定できずクラッシュするため明示指定
-- `voxel_size: 0.1` / `min_range: 0.3` / `max_range: 15.0` — 部屋スケールに縮小
-  (既定値のままだと対応点がほぼ常に0になり即座に追跡を失う)
-- `reset_on_registration_failure: true` / `enable_kidnap_relocalization: true` —
-  追跡ロスト時に自動復帰(著者は「停止して手動確認」が既定の想定だが、探索目的で有効化)
+- `voxel_size: 0.25` / `min_range: 0.7` / `max_range: 100.0` 他多数 —
+  upstream RKO-LIOのGo2向け実戦設定例(`bench_report/data/grandtour/.../mgo2.yaml`)を
+  ベースに採用。独自に細かくした`voxel_size=0.1`は、むしろ対応点探索を脆くしていた
+- `bump_image_registration: true` — 脚ロボット特有の「平坦な地面での登録のすべり」対策
+- `enable_kidnap_relocalization: true` + `relocalization_yaw_samples: 6` /
+  `relocalization_pose_stride: 30` / `relocalization_max_iterations: 8` —
+  再配置は有効だが、探索コストを既定の約10分の1に削減(§2.1参照)
 
 ## 5. 起動(オフライン再生での検証手順)
 
-録画済みbag(例: `ros2_ws/bags/walk_1111`)での検証は、`online_node` +
-`graph_based_slam_node`を個別起動し、外部で`ros2 bag play`する構成で確認済み:
+録画済みbag(例: `ros2_ws/bags/walk_1111`)での検証は、`online_node`単体を個別起動し、
+外部で`ros2 bag play`する構成で確認済み(ループクロージャが機能しないため
+`graph_based_slam_node`は現状付けなくてよい):
 
 ```bash
-# ターミナル1: RKO-LIO本体
 source /opt/ros/humble/setup.bash
 source ~/lidarslam_ws/install/setup.bash
 ros2 run rko_lio online_node --ros-args \
   -p base_frame:=base_link -p odom_frame:=odom \
   -p lidar_frame:=base_link -p imu_frame:=base_link \
+  -p lidar_topic:=/utlidar/cloud_base_restamped -p imu_topic:=/go2_state_bridge/imu \
   -p odom_topic:=/rko_lio/odometry \
   -p publish_deskewed_scan:=true \
   -p deskewed_scan_topic:=/rko_lio/frame \
   --params-file /tmp/rko_lio_go2.yaml   # ros2_ws/.../rko_lio_go2.yamlをコピーしたもの
 
-# ターミナル2: バックエンド(ループクロージャは現状不成立。付けたままでも害はない)
-ros2 launch lidarslam graph_based_slam.launch.py \
-  odom_input:=/rko_lio/odometry cloud_input:=/rko_lio/frame
-
-# ターミナル3: 録画データ再生
+# 別ターミナルで録画データ再生
 ros2 bag play ~/ros2_ws/bags/walk_1111 --clock 100 \
   --topics /utlidar/cloud_base_restamped /go2_state_bridge/imu /tf_static
 ```
 
 公式の一発コマンド(`ros2 launch lidarslam rko_lio_slam.launch.py bag_path:=...
-save_dir:=...`)も使えるが、**疎なデータでは処理が大幅に減速し(終盤は10〜20分で
-サブマップ1個分)、5分程度のbagでも数時間かかることがある**。地図(`map.pcd`/
-`pose_graph.g2o`)の保存はbag終端イベントかサービス呼び出しに紐づいており、
-途中でSIGINT中断すると保存されない点に注意。
+save_dir:=...`、`offline_node`+`graph_based_slam_node`を両方起動する構成)も使えるが、
+**疎なデータでは処理が大幅に減速し(終盤は10〜20分でサブマップ1個分)、5分程度のbagでも
+数時間かかることがある**。ループクロージャが機能しない以上、このバッチ経路を使う理由は
+現状薄い。地図(`map.pcd`/`pose_graph.g2o`)の保存もbag終端イベント/サービス呼び出しに
+紐づいており、途中でSIGINT中断すると保存されない点にも注意。
 
 ## 6. 今後(未着手)
 
-- **最優先: `online_node`が歩行開始7〜13秒で追跡を失う原因の特定。**
-  `-p max_num_threads:=`等のスレッド数指定の見直し、`offline_node`(バッチ処理、
-  リアルタイム制約なし)での同一区間の挙動比較による原因切り分けから着手する
-- 上記が解決しない限り、`real_up.sh`への組込み・実機ライブ検証は着手しない
-  (RKO-LIO採用の判断自体が保留中)
-- ループクロージャの却下条件(`max_translation_correction`等)緩和の再検証
-- ~~`/go2_state_bridge/imu`のギャップ原因調査~~ → 解決済み(§2参照。bag自体の欠落ではなく
-  バッファ詰まりの副作用)
+- **残課題①**: v4設定でも処理できたフレームは1190/4055(約29%)のみで、バッファ落ちは
+  2505件残っている(軽量化前の3576〜3890件からは改善)。登録専用スレッドが1本のみという
+  構造上の制約が残っており、マルチスレッド化や探索のさらなる軽量化が必要
+- **残課題②**: 走行中(t=50〜98秒付近)に数回、明らかに誤った値(最大54m)へ一瞬飛ぶ場面が
+  あった。1〜2サンプル後には自力で妥当な値に復帰する(以前の「一度ズレたら永久に戻らない」
+  壊れ方とは異なる)が、`relocalization_min_pose_separation`等の調整や外れ値フィルタで
+  抑制する余地がある
+- `real_up.sh`への組込み(新しい追加起動オプションとして、既存の2D経路は維持する方針)。
+  上記2点が残る間は実機ライブ検証は保留
+- `walk_1111_marker`・`walk_1111_sept2`でのv4設定の再現性確認
