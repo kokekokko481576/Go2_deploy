@@ -19,9 +19,15 @@ def generate_launch_description():
         parameters=[ekf_config, {'use_sim_time': False}],
         remappings=[
             # sim版(ekf.launch.py)の/robot1/odometry/filtered・/robot1/imu_plugin/outに相当。
-            # 実機は自前でOdometry/Imuを配信していないため、driverコンテナ側の
-            # state_to_odom_imu_node(sportmodestate由来)で用意する
-            ('raw_odom_input', '/go2_state_bridge/odom'),
+            # 実機は自前でOdometry/Imuを配信していないため、driverコンテナ側のノードで用意する。
+            #
+            # 2026-11-03: raw_odom_inputは当初 state_to_odom_imu_node(sportmodestate由来、
+            # 関節エンコーダ+IMU)の/go2_state_bridge/odomを使っていたが、これで作った地図が
+            # IMU姿勢補正後もSLAM中に大きく歪んでいた(オドメトリドリフトを疑う)。
+            # ファームウェアが別途配信する/utlidar/robot_odom(LiDARベースと見られる、
+            # utlidar_odom_restamp_nodeで機体クロック→開発PC壁時計に打ち直し済み)に切り替えて
+            # 精度を比較検証中。改善しなければ/go2_state_bridge/odomに戻すこと
+            ('raw_odom_input', '/utlidar/robot_odom_restamped'),
             ('imu_plugin/out', '/go2_state_bridge/imu'),
             ('odometry/filtered', '/go2_localization/odometry/filtered'),
             # 実機側にはsimの/robot1名前空間・上位Nav2スタックが無いため、

@@ -16,6 +16,8 @@ amcl:
     scan_topic: "/go2_localization/chin_lidar_scan"
 
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    # 2026-11-03: 0.4に上げて試したが、むしろ発散が悪化した(cov_x 2.7→5.8)。
+    # 動作モデルの不確実性不足が主因ではないと判断し、0.2に戻す(詳細は[[go2-real-slam]])
     alpha1: 0.2
     alpha2: 0.2
     alpha3: 0.2
