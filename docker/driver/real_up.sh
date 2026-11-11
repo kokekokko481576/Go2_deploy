@@ -49,6 +49,7 @@ CFG=/home/ros/ros2_ws/install/go2_localization/share/go2_localization/config/poi
 PROCS=(
   "$DRIVER|state_to_odom_imu       |lib/go2_sport_bridge/state_to_odom_imu_node"
   "$DRIVER|cloud_base_restamp      |lib/go2_sport_bridge/utlidar_cloud_restamp_node"
+  "$DRIVER|robot_odom_restamp      |lib/go2_sport_bridge/utlidar_odom_restamp_node"
   "$DRIVER|cmd_vel_to_sport(走行系)|lib/go2_sport_bridge/cmd_vel_to_sport_node"
   "$DEV|static_tf               |tf2_ros/static_transform_publisher"
   "$DEV|ekf                     |robot_localization/ekf_node"
@@ -200,11 +201,32 @@ start_driver_nodes() {
     start_node "$DRIVER" "state_to_odom_imu" "lib/go2_sport_bridge/state_to_odom_imu_node" \
         /tmp/odom.log \
         "$DRIVER_SH; exec ros2 run go2_sport_bridge state_to_odom_imu_node" || return 1
-    start_node "$DRIVER" "cloud_base_restamp" "lib/go2_sport_bridge/utlidar_cloud_restamp_node" \
+    # 【注意】cloud_base_restampとcloud_deskewed_restampは同じバイナリ(utlidar_cloud_restamp_node)
+    # を使う。is_running の判定は ps 出力への部分一致(grep -F)なので、patternはバイナリ名ではなく
+    # __node: で付けたノード名(片方にしか出ない文字列)を使うこと。同じバイナリ名のままだと、
+    # 片方が起動済みのときもう片方が「既に起動済み」と誤判定されてスキップされる
+    start_node "$DRIVER" "cloud_base_restamp" "utlidar_cloud_base_restamp_node" \
         /tmp/restamp_base.log \
         "$DRIVER_SH; exec ros2 run go2_sport_bridge utlidar_cloud_restamp_node --ros-args \
              -r __node:=utlidar_cloud_base_restamp_node \
              -r cloud_in:=/utlidar/cloud_base -r cloud_out:=/utlidar/cloud_base_restamped" || return 1
+    # 2026-11-04: /utlidar/cloud_deskewed(ファームウェアが歩行中の動きによる点群の歪みを
+    # 補正済み、frame_id=odom)を検証用に追加。Classmethodの参考記事
+    # (go2-patrol-slam_toolbox)が/utlidar/cloud_deskewedを使っていたと判明したため、
+    # これまでのcloud_base(非デスキュー)との比較用。/utlidar/robot_odomとセットで
+    # 使う前提の値とみられる(frame_id=odomはrobot_odomの座標系と同じと推測)
+    start_node "$DRIVER" "cloud_deskewed_restamp" "utlidar_cloud_deskewed_restamp_node" \
+        /tmp/restamp_deskewed.log \
+        "$DRIVER_SH; exec ros2 run go2_sport_bridge utlidar_cloud_restamp_node --ros-args \
+             -r __node:=utlidar_cloud_deskewed_restamp_node \
+             -r cloud_in:=/utlidar/cloud_deskewed -r cloud_out:=/utlidar/cloud_deskewed_restamped" || return 1
+    # 2026-11-03: /utlidar/robot_odom(LiDARベースと見られるオドメトリ)をEKFのraw_odom_inputに
+    # 使う検証用。sportmodestate由来のstate_to_odom_imu_nodeで作った地図がSLAM中に大きく歪んで
+    # いたため、オドメトリ精度の比較として追加した(ekf_real.launch.py参照)
+    start_node "$DRIVER" "robot_odom_restamp" "lib/go2_sport_bridge/utlidar_odom_restamp_node" \
+        /tmp/restamp_odom.log \
+        "$DRIVER_SH; exec ros2 run go2_sport_bridge utlidar_odom_restamp_node --ros-args \
+             -r odom_in:=/utlidar/robot_odom -r odom_out:=/utlidar/robot_odom_restamped" || return 1
     sleep 2
     local off
     off=$(docker exec "$DRIVER" bash -c "grep -o '機体クロックとの差: [^ /]*' /tmp/restamp_base.log | tail -1")
@@ -226,11 +248,22 @@ start_dev_chain() {
 
     # height_slice_viz だけは launch を使わず手動。mapping_real.launch.py の中では
     # cloud_in が /utlidar/cloud に直結されていて、上記5の理由で床除去が壊れるため
+    #
+    # imu_topic: 2026-11-03、歩行中の機体の傾き(実測ピッチ±5度程度)でfloor_zの判定が
+    # 崩れ、1m未満ビームが最大90%に達する(床を障害物として誤検出)ことが判明。
+    # ekf_real.launch.pyと同じ /go2_state_bridge/imu を渡し、重力方向基準で判定させる
+    # 2026-11-04: cloud_inをcloud_base_restamped(非デスキュー)からcloud_deskewed_restamped
+    # (ファームウェアが動き歪みを補正済み、frame_id=odom)へ切替検証。height_slice_vizは
+    # tf2でmsg.header.frame_id(=odom)->target_frame(=base_link)を変換するため、入力が
+    # どのframe_idでも動く作りになっている(コード変更不要)
     start_node "$DEV" "height_slice_viz" "lib/go2_localization/height_slice_viz" /tmp/hsv.log \
-        "$DEV_SH; exec ros2 run go2_localization height_slice_viz --ros-args \
+        "$DEV_SH; export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1; \
+         exec ros2 run go2_localization height_slice_viz --ros-args \
              -r __node:=height_slice_viz --params-file $CFG \
              -p use_sim_time:=false -p floor_z:=$FLOOR_Z \
-             -r cloud_in:=/utlidar/cloud_base_restamped \
+             -p imu_topic:=/go2_state_bridge/imu \
+             -p pose_topic:=/utlidar/robot_odom_restamped -p odom_floor_z:=-0.05 \
+             -r cloud_in:=/utlidar/cloud_deskewed_restamped \
              -r cloud_filtered:=/go2_localization/chin_lidar_scan_points" || return 1
 }
 
