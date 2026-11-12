@@ -1,0 +1,41 @@
+# scanmatcher(lidar_slam_ros2内の、RKO-LIOとは別の既存フロントエンド)向けGo2用設定。
+# 2026-11-12の検証で、RKO-LIO(rko_lio_go2.yaml)を上回る結果を再現した現時点の推奨設定。
+# 詳細: docs/手順/3D点群スキャンマッチング(NDT)起動手順.md
+#
+# - registration_method/ndt_*: NDTによる3D点群マッチング(RKO-LIOのICP系より、この
+#   疎な顎LiDARデータに対して頑健だったアルゴリズム)
+# - voxel/trans_for_mapupdate/scan_max_range: 部屋の規模(数m)に合わせて既定値
+#   (ndt_resolution=5.0, vg_size_for_input=0.2等)から縮小
+# - use_odom: false — 当初はロボット純正の脚オドメトリ(/utlidar/robot_odom_restamped、
+#   TF odom→base_link経由)を姿勢予測の事前情報として使うuse_odom:trueを試したが、
+#   TFタイミング競合(SpinningTransformListenerのポーリング間隔が粗く、脚オドメトリTFが
+#   LiDAR処理に追いつかない)を修正してなお精度が悪化した(5m超ズレが2.8%→16.4%に悪化)。
+#   脚オドメトリ事前情報の実装自体に座標系・符号・単位等の不具合がある疑いが強く、
+#   完全に無効化した状態(本設定)が3条件とも最も安定(5m超ズレ0件)という結果になった
+/**:
+    ros__parameters:
+        global_frame_id: map
+        robot_frame_id: base_link
+        odom_frame_id: odom
+        registration_method: "NDT"
+        ndt_resolution: 0.3
+        ndt_num_threads: 0
+        ndt_transformation_epsilon: 0.01
+        ndt_max_iterations: 35
+        trans_for_mapupdate: 0.2
+        vg_size_for_input: 0.1
+        vg_size_for_map: 0.05
+        min_points_for_scan: 50
+        scan_min_range: 0.1
+        scan_max_range: 15.0
+        set_initial_pose: true
+        initial_pose_x: 0.0
+        initial_pose_y: 0.0
+        initial_pose_z: 0.0
+        initial_pose_qx: 0.0
+        initial_pose_qy: 0.0
+        initial_pose_qz: 0.0
+        initial_pose_qw: 1.0
+        publish_tf: true
+        use_imu: false
+        use_odom: false
