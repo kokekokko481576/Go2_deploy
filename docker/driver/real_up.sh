@@ -61,6 +61,7 @@ PROCS=(
   "$DEV|height_slice_viz        |lib/go2_localization/height_slice_viz"
   "$DEV|pointcloud_to_laserscan |pointcloud_to_laserscan/pointcloud_to_laserscan_node"
   "$DEV|slam_toolbox            |slam_toolbox/async_slam_toolbox_node"
+  "$DEV|scanmatcher_watchdog    |scanmatcher_gap_watchdog.py"
   "$DEV|scanmatcher(3D検証経路)  |lib/scanmatcher/scanmatcher_node"
   "$DEV|cmd_vel_safety(走行系)   |cmd_vel_safety/cmd_vel_safety_node"
 )
@@ -358,12 +359,19 @@ start_scanmatcher() {
     # slam_toolboxが管理する既存の"map"フレーム(map->odom)とTFの親が競合するため、
     # "sm_map"に変更して完全に独立させている(map->base_linkを直接発行、use_odom:falseのため
     # odom->base_linkは発行しない=EKFの出力と衝突しない)
+    local sm_run_cmd="$DEV_SM_SH; exec ros2 run scanmatcher scanmatcher_node --ros-args -r input_cloud:=/utlidar/cloud_base_restamped -r imu:=/go2_state_bridge/imu --params-file $CFG_SM -p global_frame_id:=sm_map"
+
     start_node "$DEV" "scanmatcher" "lib/scanmatcher/scanmatcher_node" /tmp/scanmatcher.log \
-        "$DEV_SM_SH; exec ros2 run scanmatcher scanmatcher_node --ros-args \
-             -r input_cloud:=/utlidar/cloud_base_restamped \
-             -r imu:=/go2_state_bridge/imu \
-             --params-file $CFG_SM \
-             -p global_frame_id:=sm_map" || return 1
+        "$sm_run_cmd" || return 1
+
+    # 既知のping不安定(本体メイン基板.161、断続的に接続が切れる)で入力点群が途切れると、
+    # scanmatcherの姿勢推定が大きく破綻する(2026-11-12実機確認: ロール-122度・ピッチ-22度等)。
+    # scanmatcherには途切れ後の復帰サービスが無いため、監視して自動再起動する
+    # (地図は失うが、姿勢が壊れたまま使い続けるよりは安全という判断)
+    local watchdog_py=/home/ros/ros2_ws/src/go2_localization/scripts/scanmatcher_gap_watchdog.py
+    local watchdog_cmd="$DEV_SH; exec python3 $watchdog_py /utlidar/cloud_base_restamped \"$sm_run_cmd\""
+    start_node "$DEV" "scanmatcher_watchdog" "scanmatcher_gap_watchdog.py" /tmp/scanmatcher_watchdog.log \
+        "$watchdog_cmd" || return 1
 }
 
 start_motion() {
