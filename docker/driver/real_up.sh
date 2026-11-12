@@ -2,10 +2,11 @@
 # 実機Go2で自己位置推定/SLAMを動かすための一式を、正しい順序でまとめて起動する。
 # (devコンテナだけでなくdriverコンテナ側も含むため dev_up ではなく real_up という名前にした)
 #
-#   ./docker/driver/real_up.sh            # 観測系のみ起動(機体は動かない)
-#   ./docker/driver/real_up.sh --motion   # 走行系(安全フィルタ+cmd_velブリッジ)も起動
-#   ./docker/driver/real_up.sh status     # 何が動いているか
-#   ./docker/driver/real_up.sh down       # このスクリプトが起動したものを全部止める
+#   ./docker/driver/real_up.sh                 # 観測系のみ起動(機体は動かない)
+#   ./docker/driver/real_up.sh --motion        # 走行系(安全フィルタ+cmd_velブリッジ)も起動
+#   ./docker/driver/real_up.sh --scanmatcher   # 3D LIO検証経路(scanmatcher・NDT)も追加起動
+#   ./docker/driver/real_up.sh status          # 何が動いているか
+#   ./docker/driver/real_up.sh down            # このスクリプトが起動したものを全部止める
 #
 # 環境変数で上書き可: GO2_NIC(既定 enp2s0) / GO2_IP(既定 192.168.123.161) /
 #                     FLOOR_Z(既定 -0.35)
@@ -42,7 +43,11 @@ DEV=${DEV_CONTAINER:-arbeit-ros2}
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 DRIVER_SH='source /setup_dds.sh >/dev/null 2>&1'
 DEV_SH='source /opt/ros/humble/setup.bash; source ~/ros2_ws/install/setup.bash'
+# scanmatcher(2026-11-12検証採用)は~/lidarslam_ws(ros2_wsとは別の外部colconワークスペース、
+# docs/手順/3D点群スキャンマッチング(NDT)起動手順.md参照)に入っているため、個別にsourceする
+DEV_SM_SH='source /opt/ros/humble/setup.bash; source ~/lidarslam_ws/install/setup.bash'
 CFG=/home/ros/ros2_ws/install/go2_localization/share/go2_localization/config/pointcloud_to_laserscan.yaml
+CFG_SM=/home/ros/ros2_ws/install/go2_localization/share/go2_localization/config/scanmatcher_go2.yaml
 
 # 起動するプロセスの一覧。停止・状態表示もこの表を使う。
 # 形式: <コンテナ> <表示名> <ps照合パターン(実行ファイルのパス片)>
@@ -56,6 +61,7 @@ PROCS=(
   "$DEV|height_slice_viz        |lib/go2_localization/height_slice_viz"
   "$DEV|pointcloud_to_laserscan |pointcloud_to_laserscan/pointcloud_to_laserscan_node"
   "$DEV|slam_toolbox            |slam_toolbox/async_slam_toolbox_node"
+  "$DEV|scanmatcher(3D検証経路)  |lib/scanmatcher/scanmatcher_node"
   "$DEV|cmd_vel_safety(走行系)   |cmd_vel_safety/cmd_vel_safety_node"
 )
 
@@ -343,8 +349,25 @@ start_slam() {
     log "  スキャンの取りこぼし無し"
 }
 
+start_scanmatcher() {
+    log "7. scanmatcher(3D検証経路、既存の2D経路=height_slice_viz/slam_toolboxとは並走・独立)"
+    # 2026-11-12、docs/手順/3D点群スキャンマッチング(NDT)起動手順.md で検証・採用した設定。
+    # 入力はdriver側で既に中継済みの /utlidar/cloud_base_restamped と
+    # /go2_state_bridge/imu(どちらもstart_driver_nodesで起動済み)で、2D経路(height_slice_viz
+    # 以降)とは別の独立した経路。global_frame_idは標準設定の"map"のままだと、
+    # slam_toolboxが管理する既存の"map"フレーム(map->odom)とTFの親が競合するため、
+    # "sm_map"に変更して完全に独立させている(map->base_linkを直接発行、use_odom:falseのため
+    # odom->base_linkは発行しない=EKFの出力と衝突しない)
+    start_node "$DEV" "scanmatcher" "lib/scanmatcher/scanmatcher_node" /tmp/scanmatcher.log \
+        "$DEV_SM_SH; exec ros2 run scanmatcher scanmatcher_node --ros-args \
+             -r input_cloud:=/utlidar/cloud_base_restamped \
+             -r imu:=/go2_state_bridge/imu \
+             --params-file $CFG_SM \
+             -p global_frame_id:=sm_map" || return 1
+}
+
 start_motion() {
-    log "7. 走行系"
+    log "8. 走行系"
     echo "[real_up]   ** 機体が動く経路を有効にする。周囲の安全と、estop.shを打てる別ターミナルを確保すること **"
     echo "[real_up]   ** Unitree Goアプリで「通常モード」にしておくこと(AIモードだと脚が出ない) **"
     start_node "$DEV" "cmd_vel_safety" "cmd_vel_safety/cmd_vel_safety_node" /tmp/safety.log \
@@ -356,7 +379,7 @@ start_motion() {
 }
 
 cmd_up() {
-    local with_motion=$1
+    local with_motion=$1 with_scanmatcher=$2
     check_preconditions
     start_containers
     check_dds
@@ -364,6 +387,7 @@ cmd_up() {
     start_dev_chain    || die "dev側の起動に失敗"
     check_floor_removal || die "床除去の検定に失敗。この状態でslam_toolboxを上げると地図に床が焼き付く"
     start_slam         || die "slam_toolboxの起動に失敗"
+    [ "$with_scanmatcher" = yes ] && { start_scanmatcher || die "scanmatcherの起動に失敗"; }
     [ "$with_motion" = yes ] && { start_motion || die "走行系の起動に失敗"; }
 
     echo
@@ -375,6 +399,13 @@ cmd_up() {
 [real_up]   地図を見る : docker exec -it $DEV bash -c 'source /opt/ros/humble/setup.bash; rviz2'
 [real_up]                (Fixed Frame: map / トピック /go2_localization/map)
 MSG
+    if [ "$with_scanmatcher" = yes ]; then
+        cat <<MSG
+[real_up]   scanmatcher(3D検証経路、2D経路と並走・独立):
+[real_up]                Fixed Frame: sm_map / 推定姿勢: /current_pose / 地図: /map (PointCloud2)
+[real_up]                ログ: docker exec $DEV cat /tmp/scanmatcher.log
+MSG
+    fi
     if [ "$with_motion" = yes ]; then
         cat <<MSG
 [real_up]   非常停止   : docker exec -it $DRIVER bash -c 'source /setup_dds.sh; ros2 run go2_sport_bridge estop.sh'
@@ -397,20 +428,22 @@ MSG
 }
 
 WITH_MOTION=no
+WITH_SCANMATCHER=no
 ACTION=up
 for arg in "$@"; do
     case "$arg" in
-        up)        ACTION=up ;;
-        down)      ACTION=down ;;
-        status)    ACTION=status ;;
-        --motion)  WITH_MOTION=yes ;;
-        -h|--help) sed -n '2,14p' "${BASH_SOURCE[0]}"; exit 0 ;;
-        *)         die "不明な引数: $arg (up|down|status|--motion)" ;;
+        up)             ACTION=up ;;
+        down)           ACTION=down ;;
+        status)         ACTION=status ;;
+        --motion)       WITH_MOTION=yes ;;
+        --scanmatcher)  WITH_SCANMATCHER=yes ;;
+        -h|--help) sed -n '2,15p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        *)         die "不明な引数: $arg (up|down|status|--motion|--scanmatcher)" ;;
     esac
 done
 
 case "$ACTION" in
-    up)     cmd_up "$WITH_MOTION" ;;
+    up)     cmd_up "$WITH_MOTION" "$WITH_SCANMATCHER" ;;
     down)   cmd_down ;;
     status) cmd_status ;;
 esac

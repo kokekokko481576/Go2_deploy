@@ -151,13 +151,35 @@ ros2 bag play ~/ros2_ws/bags/walk_1111 --clock 100 \
   撮影時の実距離データが残っていないため有効な近似ができず、固定しきい値フィルタと
   有意差なし
 
-## 8. 今後(未着手)
+## 9. `real_up.sh`への組込み(2026-11-12)
 
+`docker/driver/real_up.sh`に`--scanmatcher`オプションを追加した。既存の2D経路
+(height_slice_viz→slam_toolbox)には一切手を加えず、並走する独立経路として追加:
+
+```bash
+./docker/driver/real_up.sh --scanmatcher          # 観測系+scanmatcher
+./docker/driver/real_up.sh --motion --scanmatcher # 走行系も含めて全部
+```
+
+- 入力はdriver側で既に中継済みの`/utlidar/cloud_base_restamped`・`/go2_state_bridge/imu`
+  (2D経路と共用、追加の中継ノードは不要)
+- `global_frame_id`は標準設定の`map`から`sm_map`に実行時オーバーライドしている。
+  slam_toolboxが管理する既存の`map`フレーム(`map->odom`)とTFの親が競合するのを避けるため
+  (scanmatcherは`use_odom:false`のため`map->base_link`を直接発行、EKFの`odom->base_link`
+  とは衝突しない)
+- 推定姿勢: `/current_pose`、地図: `/map`(PointCloud2)。RVizでは`Fixed Frame: sm_map`
+- **前提: `ros2_ws`のcolcon buildが必要**(`scanmatcher_go2.yaml`が
+  `install/go2_localization/share/.../config/`に反映されるまで)。`~/lidarslam_ws`側は
+  ビルド済み前提(§3参照)
+- **未実施(ユーザーが実機で検証すること)**: 本結合は机上でのスクリプト編集のみで、
+  実機での起動確認は行っていない
+
+## 10. 今後(未着手)
+
+- 実機での`--scanmatcher`起動確認(上記、最優先)
 - ループクロージャの検証(今回はスキャンマッチングのみ、バックエンドのループクロージャ
   機能は未検証)
 - 脚オドメトリ事前情報の不具合原因調査(優先度低、無効化で十分良い結果が出ているため)
 - 高さ帯スライス→2D occupancy grid化を正式な変換パイプラインとして整備
-- `real_up.sh`への組込み(新しい追加起動オプションとして、既存の2D経路は維持する方針)
-- 実機ライブでの検証(今回はオフラインbag再生のみ)
 - `scanmatcher`採用を正式決定する場合、RKO-LIO関連ドキュメントとの整理(本命はこちらに
   切替、RKO-LIO側は「検証したが不採用」という位置づけに変更)
