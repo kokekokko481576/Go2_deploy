@@ -8,6 +8,7 @@ scanmatcherには途切れ後の姿勢復帰サービスが無く(2026-11-12確�
 
 使い方: real_up.shのstart_scanmatcherから、scanmatcher本体と同じ環境・引数で起動される。
 """
+import os
 import subprocess
 import sys
 import time
@@ -19,6 +20,11 @@ from sensor_msgs.msg import PointCloud2
 GAP_THRESHOLD_SEC = 3.0
 RESTART_COOLDOWN_SEC = 10.0
 CHECK_PERIOD_SEC = 1.0
+# ギャップ検知のたびにこのファイルへ書く(mtime更新)。ホスト側はこのファイルを
+# bind mount経由で監視し、更新を見てtcpdumpを起動する(2026-11-12、ping不安定の
+# 原因調査用。コンテナ内にはtcpdumpも無く、root権限も無いため、コンテナの中からは
+# 直接パケットキャプチャできない。ホスト側に処理を委ねるためのファイル越しの合図)
+GAP_TRIGGER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.gap_trigger')
 # real_up.shのPROCS表のscanmatcherパターンと同じ文字列。定数としてソース内に埋め込み、
 # CLI引数にはしない。引数にすると、この文字列自体がwatchdog自身のps argsに載ってしまい、
 # real_up.sh側のis_running("lib/scanmatcher/scanmatcher_node")がwatchdogをscanmatcher本体と
@@ -52,11 +58,19 @@ class GapWatchdog(Node):
             return
         self.get_logger().warn(
             f"入力点群が{gap:.1f}秒途切れた(ping不安定の疑い)。scanmatcher_nodeを再起動する")
+        self._write_gap_trigger(gap)
         self._restart_scanmatcher()
         self.last_restart_time = now
         # 再起動後、新プロセスからの最初のメッセージが来るまでの間に
         # 再度ゲートが引っかからないよう、タイマーを一旦リセットしておく
         self.last_msg_time = now
+
+    def _write_gap_trigger(self, gap: float):
+        try:
+            with open(GAP_TRIGGER_FILE, 'w') as f:
+                f.write(f"{time.time():.3f} {gap:.1f}\n")
+        except OSError as e:
+            self.get_logger().error(f"gap trigger書き込み失敗: {e}")
 
     def _restart_scanmatcher(self):
         subprocess.run(

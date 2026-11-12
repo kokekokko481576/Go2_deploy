@@ -412,6 +412,10 @@ MSG
 [real_up]   scanmatcher(3D検証経路、2D経路と並走・独立):
 [real_up]                Fixed Frame: sm_map / 推定姿勢: /current_pose / 地図: /map (PointCloud2)
 [real_up]                ログ: docker exec $DEV cat /tmp/scanmatcher.log
+[real_up]                ping不安定の原因調査用に、途切れを検知した瞬間を自動でパケット
+[real_up]                キャプチャしたい場合(要: 事前に一度だけ
+[real_up]                sudo setcap cap_net_raw,cap_net_admin=eip \$(which tcpdump)):
+[real_up]                  ./docker/driver/capture_on_gap.sh &
 MSG
     fi
     if [ "$with_motion" = yes ]; then

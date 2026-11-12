@@ -32,3 +32,7 @@ tools/logs/
 ros2_ws/bags/
 ros2_ws/map_real_*.pgm
 ros2_ws/map_real_*.yaml
+
+# scanmatcher_gap_watchdog.pyがギャップ検知時に書く合図ファイル(実行時に生成・更新される
+# だけのランタイム成果物。capture_on_gap.shがこれを監視する)
+ros2_ws/src/go2_localization/scripts/.gap_trigger
