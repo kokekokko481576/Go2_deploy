@@ -4,6 +4,12 @@
 #
 # - registration_method/ndt_*: NDTによる3D点群マッチング(RKO-LIOのICP系より、この
 #   疎な顎LiDARデータに対して頑健だったアルゴリズム)
+# - ndt_num_threads: 4(2026-11-12変更、既定0=自動/全コア使用から) — 実機でPC側CPUが
+#   1020%(16コア中10コア分)に達する場面を確認し、一時的に「PC側CPU過負荷がping不安定の
+#   原因」と疑ったが、スレッド数を4に絞ってCPU使用率を下げても、全く同じ周期・長さの
+#   ギャップが再発したため、CPU過負荷説は誤りと判明(撤回)。この値は「副作用なくCPU
+#   負荷を下げられる」という理由だけで残している。根本原因は本体(.161)側の間欠的な
+#   不安定さ(2026-11-05から既知)のままで未解決。詳細: memory go2-real-slam.md
 # - voxel/trans_for_mapupdate/scan_max_range: 部屋の規模(数m)に合わせて既定値
 #   (ndt_resolution=5.0, vg_size_for_input=0.2等)から縮小
 # - use_odom: false — 当初はロボット純正の脚オドメトリ(/utlidar/robot_odom_restamped、
@@ -25,7 +31,7 @@
         odom_frame_id: odom
         registration_method: "NDT"
         ndt_resolution: 0.3
-        ndt_num_threads: 0
+        ndt_num_threads: 4
         ndt_transformation_epsilon: 0.01
         ndt_max_iterations: 35
         trans_for_mapupdate: 0.2
