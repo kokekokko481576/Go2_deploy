@@ -76,6 +76,6 @@ Visualization Manager:
     Current:
       Class: rviz_default_plugins/TopDownOrtho
       Name: Current View
-      Scale: 50
+      Scale: 150
       X: 0
       Y: 0
