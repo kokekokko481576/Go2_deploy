@@ -73,11 +73,52 @@ class GapWatchdog(Node):
             self.get_logger().error(f"gap trigger書き込み失敗: {e}")
 
     def _restart_scanmatcher(self):
-        subprocess.run(
-            ['bash', '-c', f"pkill -9 -f '{SCANMATCHER_PATTERN}' 2>/dev/null; true"],
-            check=False)
+        # 2026-11-16: pkill -f はROS_DOMAIN_IDに関係なくコンテナ内の全scanmatcher_nodeを
+        # 殺してしまい、オフライン再生検証用の別インスタンス(別ドメイン)を巻き添えで
+        # 殺す事故が起きた(2026-11-12に一度発見・記録していたのに今回再発)。
+        # 自分と同じROS_DOMAIN_IDのプロセスだけをkillするよう修正する。
+        own_domain = os.environ.get('ROS_DOMAIN_ID', '0')
+        pids = self._find_pids_in_same_domain(SCANMATCHER_PATTERN, own_domain)
+        if pids:
+            subprocess.run(['kill', '-9', *[str(p) for p in pids]], check=False)
+        else:
+            self.get_logger().warn(
+                "再起動対象のscanmatcher_node(自ドメイン)が見つからなかった。"
+                "新規プロセスのみ起動する")
         time.sleep(1.0)
         subprocess.Popen(['bash', '-c', self.restart_cmd])
+
+    @staticmethod
+    def _read_proc_env(pid: int, key: str):
+        try:
+            with open(f'/proc/{pid}/environ', 'rb') as f:
+                data = f.read()
+        except (FileNotFoundError, PermissionError):
+            return None
+        prefix = key.encode() + b'='
+        for entry in data.split(b'\0'):
+            if entry.startswith(prefix):
+                return entry[len(prefix):].decode(errors='replace')
+        return None
+
+    @classmethod
+    def _find_pids_in_same_domain(cls, pattern: str, domain_id: str):
+        matched = []
+        for name in os.listdir('/proc'):
+            if not name.isdigit():
+                continue
+            pid = int(name)
+            try:
+                with open(f'/proc/{pid}/cmdline', 'rb') as f:
+                    cmdline = f.read().decode(errors='replace')
+            except (FileNotFoundError, PermissionError):
+                continue
+            if pattern not in cmdline:
+                continue
+            proc_domain = cls._read_proc_env(pid, 'ROS_DOMAIN_ID') or '0'
+            if proc_domain == domain_id:
+                matched.append(pid)
+        return matched
 
 
 def main():
