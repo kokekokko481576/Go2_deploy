@@ -39,6 +39,10 @@ while true; do
             echo "[capture_on_gap] ギャップ検知(${gap_sec}秒) → ${CAPTURE_SEC}秒キャプチャ開始: $outfile"
             tcpdump -i "$NIC" host "$GO2_IP" -w "$outfile" -G "$CAPTURE_SEC" -W 1 \
                 > "$OUT_DIR/gap_${ts}.tcpdump.log" 2>&1 &
+            # 2026-11-12: パケットキャプチャの結果、ping切断ではなくPC側の送信停止(全DDS
+            # participantが一斉に止まる)らしいと分かったため、PC側のCPU・負荷も同時記録する
+            vmstat 1 "$CAPTURE_SEC" > "$OUT_DIR/gap_${ts}.vmstat.log" 2>&1 &
+            top -b -d 1 -n "$CAPTURE_SEC" > "$OUT_DIR/gap_${ts}.top.log" 2>&1 &
         fi
     fi
     sleep 0.5
