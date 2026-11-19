@@ -9,12 +9,17 @@ remap済み)。
 「何もない床」に当たるまでの理論距離を逆算し、実際の反射距離がそれより
 floor_margin以上手前なら障害物(壁等)、理論距離付近〜以遠なら床とみなして除去する。
 """
+import time
+from collections import deque
+
 import numpy as np
 import rclpy
+from nav_msgs.msg import Odometry
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import PointCloud2
+from rclpy.time import Time
+from sensor_msgs.msg import Imu, PointCloud2
 from sensor_msgs_py import point_cloud2
 from tf2_ros import Buffer, TransformListener
 
@@ -57,6 +62,26 @@ class HeightSliceViz(Node):
         self.declare_parameter('body_exclude_min_y', -0.18)
         self.declare_parameter('body_exclude_max_y', 0.18)
 
+        # 2026-11-03: floor_zはtarget_frame(base_link)相対の固定値のため、歩行中に機体が
+        # 前傾/傾斜すると(実測でピッチ±5度程度)理論床距離の計算がずれ、床を障害物として
+        # 誤検出する(1m未満ビームが最大90%に達した)。これを補正するため、指定したIMUの
+        # orientationからbase_link相対の重力方向を求め、floor_z/max_heightの判定を
+        # 「base_linkのz軸」ではなく「重力方向への投影(=水平基準の高さ)」で行う。
+        # 空文字(既定)なら無効化され、重力方向は[0,0,1]固定(=従来動作、姿勢水平前提)になる
+        self.declare_parameter('imu_topic', '')
+
+        # 2026-11-05: /utlidar/cloud_deskewed(frame_id=ファームウェア内部のodom、約1万点の蓄積点群)
+        # をtf2でbase_linkへ変換すると、(1)自前EKFのodomはtwo_d_modeでz・roll・pitchが0に潰れて
+        # おりファームウェアのodomと一致しない、(2)シングルスレッドでlookupが/tf受信を塞ぎ
+        # バッファが約3秒遅れる、の2点で床除去が成立しなかった。指定するとtf2を使わず、
+        # 同じodom系列のOdometry(/utlidar/robot_odom、3D姿勢入り)の時刻最近傍で変換する
+        self.declare_parameter('pose_topic', '')
+        self.declare_parameter('pose_max_age', 0.2)
+        # pose_topic使用時の床判定。点群のframe(重力方向に揃い、2026-11-05実測で床は
+        # z=-0.07〜0.0)のz値で直接判定する。機体の高さ・伏せ/起立・傾きに依存しないため、
+        # floor_z・imu_topicによる補正はこのモードでは使わない
+        self.declare_parameter('odom_floor_z', 0.0)
+
         self.target_frame = self.get_parameter('target_frame').value
         self.floor_z = self.get_parameter('floor_z').value
         self.floor_margin = self.get_parameter('floor_margin').value
@@ -69,37 +94,126 @@ class HeightSliceViz(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
+        # 水平基準の上方向をbase_link相対で表したベクトル。IMU未指定・未着時はこのまま
+        # ([0,0,1]=target_frameのz軸=水平)で、floor_zの意味は従来通りtarget_frame相対の高さになる
+        self.gravity_up_in_base = np.array([0.0, 0.0, 1.0])
+        self._last_imu_update = 0.0
+        imu_topic = self.get_parameter('imu_topic').value
+        if imu_topic:
+            self.create_subscription(Imu, imu_topic, self.on_imu, qos_profile_sensor_data)
+
+        # 2026-11-05: 機体メイン基板(.161)が数十秒ずつ配信を止める現象があり、再開直後は
+        # EKFが途切れ中の外挿から戻りきっておらずodom->base_linkがずれている。再開から
+        # pose_resume_holdの間は点群を捨て、SLAMにずれた位置のスキャンを入れない
+        self.declare_parameter('pose_resume_gap', 0.5)
+        self.declare_parameter('pose_resume_hold', 0.5)
+        self.pose_resume_gap = self.get_parameter('pose_resume_gap').value
+        self.pose_resume_hold = self.get_parameter('pose_resume_hold').value
+        self._last_pose_mono = None
+        self._hold_until_mono = 0.0
+
+        self._poses = deque(maxlen=50)
+        self.pose_max_age = self.get_parameter('pose_max_age').value
+        pose_topic = self.get_parameter('pose_topic').value
+        if pose_topic:
+            self.create_subscription(Odometry, pose_topic, self.on_pose, 10)
+
         self.sub = self.create_subscription(
             PointCloud2, 'cloud_in', self.on_cloud, qos_profile_sensor_data)
         self.pub = self.create_publisher(PointCloud2, 'cloud_filtered', 10)
 
+    def on_imu(self, msg):
+        # 実機のIMUは300Hzで配信されており、毎回処理するとこのノードのCPU使用率が
+        # 跳ね上がり、cloud_in側のコールバックが飢餓状態になって一切処理されなくなった
+        # (2026-11-03に実機で確認)。姿勢は数十ms単位では殆ど変わらないので20Hzに間引く
+        now = time.monotonic()
+        if now - self._last_imu_update < 0.05:
+            return
+        self._last_imu_update = now
+
+        o = msg.orientation
+        # IMUのorientationはbase_link->参照座標系(odom等、水平基準)の回転。参照座標系の
+        # 上方向[0,0,1]をbase_link相対で見るには逆回転(=転置、直交行列なので)を掛ける
+        rot = quaternion_to_matrix(o.x, o.y, o.z, o.w)
+        self.gravity_up_in_base = rot.T @ np.array([0.0, 0.0, 1.0])
+
+    def on_pose(self, msg):
+        now = time.monotonic()
+        if self._last_pose_mono is not None:
+            gap = now - self._last_pose_mono
+            if gap > self.pose_resume_gap:
+                self._hold_until_mono = now + self.pose_resume_hold
+                self.get_logger().warn(
+                    f'pose_topicが{gap:.1f}s途切れていた。再開後{self.pose_resume_hold}sは点群を捨てる')
+        self._last_pose_mono = now
+        self._poses.append(msg)
+
+    def _pose_transform(self, msg):
+        if time.monotonic() < self._hold_until_mono:
+            raise RuntimeError('pose_topic途切れからの再開直後のため点群を捨てた')
+        if not self._poses:
+            raise RuntimeError('pose_topicがまだ1通も届いていない')
+        stamp = Time.from_msg(msg.header.stamp).nanoseconds
+        odom = min(self._poses,
+                   key=lambda o: abs(Time.from_msg(o.header.stamp).nanoseconds - stamp))
+        age = abs(Time.from_msg(odom.header.stamp).nanoseconds - stamp) / 1e9
+        if age > self.pose_max_age:
+            raise RuntimeError(f'時刻が最も近い姿勢でも{age:.3f}s離れている')
+        if odom.header.frame_id != msg.header.frame_id:
+            raise RuntimeError(
+                f'点群のframe_id({msg.header.frame_id})と姿勢のframe_id'
+                f'({odom.header.frame_id})が違う')
+        p = odom.pose.pose.position
+        q = odom.pose.pose.orientation
+        rot_odom_base = quaternion_to_matrix(q.x, q.y, q.z, q.w)
+        rot = rot_odom_base.T
+        trans = -rot @ np.array([p.x, p.y, p.z])
+        return rot, trans, p.z
+
+    def _tf_transform(self, msg):
+        transform = self.tf_buffer.lookup_transform(
+            self.target_frame, msg.header.frame_id, msg.header.stamp,
+            timeout=Duration(seconds=0.1))
+        t = transform.transform
+        rot = quaternion_to_matrix(t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w)
+        trans = np.array([t.translation.x, t.translation.y, t.translation.z])
+        return rot, trans, trans
+
     def on_cloud(self, msg):
+        pose_mode = bool(self.get_parameter('pose_topic').value)
         try:
-            transform = self.tf_buffer.lookup_transform(
-                self.target_frame, msg.header.frame_id, msg.header.stamp,
-                timeout=Duration(seconds=0.1))
+            if pose_mode:
+                rot, trans, base_z = self._pose_transform(msg)
+            else:
+                rot, trans, sensor_origin = self._tf_transform(msg)
         except Exception as ex:
             self.get_logger().warn(
                 f'transform {msg.header.frame_id} -> {self.target_frame} failed: {ex}',
                 throttle_duration_sec=5.0)
             return
 
-        points = list(point_cloud2.read_points(
-            msg, field_names=('x', 'y', 'z'), skip_nans=True))
-        if not points:
-            return
-        xyz = np.array([[p[0], p[1], p[2]] for p in points], dtype=np.float64)
+        # read_points_numpyは全フィールドが同じ型でないと使えない(cloud_baseはring/timeが別型)
+        pts = point_cloud2.read_points(msg, field_names=('x', 'y', 'z'), skip_nans=True)
+        xyz = np.column_stack([pts['x'], pts['y'], pts['z']]).astype(np.float64)
         # skip_nans=Trueはinf(検出なしを示す値)までは除いてくれないため別途フィルタ
         xyz = xyz[np.isfinite(xyz).all(axis=1)]
+        if pose_mode:
+            # cloud_deskewedは固定長バッファで、約1万点のうち実点以外は(0,0,0)埋め
+            xyz = xyz[np.any(xyz != 0.0, axis=1)]
         if xyz.shape[0] == 0:
             return
 
-        t = transform.transform
-        rot = quaternion_to_matrix(t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w)
-        sensor_origin = np.array([t.translation.x, t.translation.y, t.translation.z])
-        xyz_out = xyz @ rot.T + sensor_origin
+        xyz_out = xyz @ rot.T + trans
 
-        filtered = xyz_out[self._obstacle_mask(xyz_out, sensor_origin)]
+        if pose_mode:
+            z = xyz[:, 2]
+            floor_z = self.get_parameter('odom_floor_z').value
+            mask = ((z > floor_z + self.floor_margin)
+                    & (z <= base_z + self.max_height)
+                    & ~self._self_body(xyz_out))
+        else:
+            mask = self._obstacle_mask(xyz_out, sensor_origin)
+        filtered = xyz_out[mask]
 
         header = msg.header
         header.frame_id = self.target_frame
@@ -110,28 +224,36 @@ class HeightSliceViz(Node):
         ray = points - sensor_origin
         actual_range = np.linalg.norm(ray, axis=1)
 
-        # このレイが床(target_frame相対z=floor_z)に当たるまでの理論距離。
-        # ray_z >= 0(水平以上/上向き)は床に当たらないレイなのでinf扱い(=常に障害物側)
-        ray_z = ray[:, 2]
+        # 高さ判定は target_frame の生のz軸ではなく、重力方向(水平基準の上方向、IMU未指定
+        # 時は[0,0,1]でz軸と同じ)への投影で行う。機体が傾いても「本当の水平高さ」で
+        # floor_z/max_heightを判定できる
+        g = self.gravity_up_in_base
+        ray_up = ray @ g
+        origin_up = float(sensor_origin @ g)
+        points_up = points @ g
+
+        # このレイが床(水平基準でz=floor_z)に当たるまでの理論距離。
+        # ray_up >= 0(水平以上/上向き)は床に当たらないレイなのでinf扱い(=常に障害物側)
         with np.errstate(divide='ignore', invalid='ignore'):
             floor_range = np.where(
-                ray_z < 0,
-                actual_range * (self.floor_z - sensor_origin[2]) / ray_z,
+                ray_up < 0,
+                actual_range * (self.floor_z - origin_up) / ray_up,
                 np.inf,
             )
 
         is_floor_hit = actual_range >= (floor_range - self.floor_margin)
-        is_within_upper_bound = points[:, 2] <= self.max_height
+        is_within_upper_bound = points_up <= self.max_height
 
+        return (~is_floor_hit) & is_within_upper_bound & (~self._self_body(points))
+
+    def _self_body(self, points):
         # 本体(脚含む)の自己反射: 距離に関係なく、base_link相対のx/y矩形内なら除外
-        is_self_body = (
+        return (
             (points[:, 0] >= self.body_exclude_min_x)
             & (points[:, 0] <= self.body_exclude_max_x)
             & (points[:, 1] >= self.body_exclude_min_y)
             & (points[:, 1] <= self.body_exclude_max_y)
         )
-
-        return (~is_floor_hit) & is_within_upper_bound & (~is_self_body)
 
 
 def main(args=None):

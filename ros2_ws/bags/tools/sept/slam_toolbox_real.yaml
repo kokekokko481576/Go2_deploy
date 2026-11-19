@@ -1,0 +1,31 @@
+slam_toolbox:
+  ros__parameters:
+    # C4(事前スキャンでのクソ雑map作成)用。mapping=新規に地図を作りながらmap->odomを推定する
+    # (AMCLと違い既知地図を要らない)。amcl.yamlのAMCLとは同時に動かさない(役割が競合する)
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    mode: mapping
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_link
+    scan_topic: /go2_localization/chin_lidar_scan
+    use_scan_matching: true
+    resolution: 0.05
+    # pointcloud_to_laserscan.yamlのrange_min(0.4)に合わせる。既定0.0のままだと
+    # 「LiDARの実能力(0.4m)を下回る設定」という警告が起動のたびに出る
+    minimum_range: 0.4
+    max_laser_range: 20.0
+    minimum_time_interval: 0.5
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.0
+    stack_size_to_use: 40000000
+
+    # 実機で歩かせながら地図を作る想定なので、動いた分だけ更新すれば十分
+    # (go2_localizationのamcl.yamlのupdate_min_a/dと同じ考え方)
+    minimum_travel_distance: 0.2
+    minimum_travel_heading: 0.2

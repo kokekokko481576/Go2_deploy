@@ -2,10 +2,11 @@
 # 実機Go2で自己位置推定/SLAMを動かすための一式を、正しい順序でまとめて起動する。
 # (devコンテナだけでなくdriverコンテナ側も含むため dev_up ではなく real_up という名前にした)
 #
-#   ./docker/driver/real_up.sh            # 観測系のみ起動(機体は動かない)
-#   ./docker/driver/real_up.sh --motion   # 走行系(安全フィルタ+cmd_velブリッジ)も起動
-#   ./docker/driver/real_up.sh status     # 何が動いているか
-#   ./docker/driver/real_up.sh down       # このスクリプトが起動したものを全部止める
+#   ./docker/driver/real_up.sh                 # 観測系のみ起動(機体は動かない)
+#   ./docker/driver/real_up.sh --motion        # 走行系(安全フィルタ+cmd_velブリッジ)も起動
+#   ./docker/driver/real_up.sh --scanmatcher   # 3D LIO検証経路(scanmatcher・NDT)も追加起動
+#   ./docker/driver/real_up.sh status          # 何が動いているか
+#   ./docker/driver/real_up.sh down            # このスクリプトが起動したものを全部止める
 #
 # 環境変数で上書き可: GO2_NIC(既定 enp2s0) / GO2_IP(既定 192.168.123.161) /
 #                     FLOOR_Z(既定 -0.35)
@@ -42,19 +43,26 @@ DEV=${DEV_CONTAINER:-arbeit-ros2}
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 DRIVER_SH='source /setup_dds.sh >/dev/null 2>&1'
 DEV_SH='source /opt/ros/humble/setup.bash; source ~/ros2_ws/install/setup.bash'
+# scanmatcher(2026-11-12検証採用)は~/lidarslam_ws(ros2_wsとは別の外部colconワークスペース、
+# docs/手順/3D点群スキャンマッチング(NDT)起動手順.md参照)に入っているため、個別にsourceする
+DEV_SM_SH='source /opt/ros/humble/setup.bash; source ~/lidarslam_ws/install/setup.bash'
 CFG=/home/ros/ros2_ws/install/go2_localization/share/go2_localization/config/pointcloud_to_laserscan.yaml
+CFG_SM=/home/ros/ros2_ws/install/go2_localization/share/go2_localization/config/scanmatcher_go2.yaml
 
 # 起動するプロセスの一覧。停止・状態表示もこの表を使う。
 # 形式: <コンテナ> <表示名> <ps照合パターン(実行ファイルのパス片)>
 PROCS=(
   "$DRIVER|state_to_odom_imu       |lib/go2_sport_bridge/state_to_odom_imu_node"
   "$DRIVER|cloud_base_restamp      |lib/go2_sport_bridge/utlidar_cloud_restamp_node"
+  "$DRIVER|robot_odom_restamp      |lib/go2_sport_bridge/utlidar_odom_restamp_node"
   "$DRIVER|cmd_vel_to_sport(走行系)|lib/go2_sport_bridge/cmd_vel_to_sport_node"
   "$DEV|static_tf               |tf2_ros/static_transform_publisher"
   "$DEV|ekf                     |robot_localization/ekf_node"
   "$DEV|height_slice_viz        |lib/go2_localization/height_slice_viz"
   "$DEV|pointcloud_to_laserscan |pointcloud_to_laserscan/pointcloud_to_laserscan_node"
   "$DEV|slam_toolbox            |slam_toolbox/async_slam_toolbox_node"
+  "$DEV|scanmatcher_watchdog    |scanmatcher_gap_watchdog.py"
+  "$DEV|scanmatcher(3D検証経路)  |lib/scanmatcher/scanmatcher_node"
   "$DEV|cmd_vel_safety(走行系)   |cmd_vel_safety/cmd_vel_safety_node"
 )
 
@@ -200,11 +208,32 @@ start_driver_nodes() {
     start_node "$DRIVER" "state_to_odom_imu" "lib/go2_sport_bridge/state_to_odom_imu_node" \
         /tmp/odom.log \
         "$DRIVER_SH; exec ros2 run go2_sport_bridge state_to_odom_imu_node" || return 1
-    start_node "$DRIVER" "cloud_base_restamp" "lib/go2_sport_bridge/utlidar_cloud_restamp_node" \
+    # 【注意】cloud_base_restampとcloud_deskewed_restampは同じバイナリ(utlidar_cloud_restamp_node)
+    # を使う。is_running の判定は ps 出力への部分一致(grep -F)なので、patternはバイナリ名ではなく
+    # __node: で付けたノード名(片方にしか出ない文字列)を使うこと。同じバイナリ名のままだと、
+    # 片方が起動済みのときもう片方が「既に起動済み」と誤判定されてスキップされる
+    start_node "$DRIVER" "cloud_base_restamp" "utlidar_cloud_base_restamp_node" \
         /tmp/restamp_base.log \
         "$DRIVER_SH; exec ros2 run go2_sport_bridge utlidar_cloud_restamp_node --ros-args \
              -r __node:=utlidar_cloud_base_restamp_node \
              -r cloud_in:=/utlidar/cloud_base -r cloud_out:=/utlidar/cloud_base_restamped" || return 1
+    # 2026-11-04: /utlidar/cloud_deskewed(ファームウェアが歩行中の動きによる点群の歪みを
+    # 補正済み、frame_id=odom)を検証用に追加。Classmethodの参考記事
+    # (go2-patrol-slam_toolbox)が/utlidar/cloud_deskewedを使っていたと判明したため、
+    # これまでのcloud_base(非デスキュー)との比較用。/utlidar/robot_odomとセットで
+    # 使う前提の値とみられる(frame_id=odomはrobot_odomの座標系と同じと推測)
+    start_node "$DRIVER" "cloud_deskewed_restamp" "utlidar_cloud_deskewed_restamp_node" \
+        /tmp/restamp_deskewed.log \
+        "$DRIVER_SH; exec ros2 run go2_sport_bridge utlidar_cloud_restamp_node --ros-args \
+             -r __node:=utlidar_cloud_deskewed_restamp_node \
+             -r cloud_in:=/utlidar/cloud_deskewed -r cloud_out:=/utlidar/cloud_deskewed_restamped" || return 1
+    # 2026-11-03: /utlidar/robot_odom(LiDARベースと見られるオドメトリ)をEKFのraw_odom_inputに
+    # 使う検証用。sportmodestate由来のstate_to_odom_imu_nodeで作った地図がSLAM中に大きく歪んで
+    # いたため、オドメトリ精度の比較として追加した(ekf_real.launch.py参照)
+    start_node "$DRIVER" "robot_odom_restamp" "lib/go2_sport_bridge/utlidar_odom_restamp_node" \
+        /tmp/restamp_odom.log \
+        "$DRIVER_SH; exec ros2 run go2_sport_bridge utlidar_odom_restamp_node --ros-args \
+             -r odom_in:=/utlidar/robot_odom -r odom_out:=/utlidar/robot_odom_restamped" || return 1
     sleep 2
     local off
     off=$(docker exec "$DRIVER" bash -c "grep -o '機体クロックとの差: [^ /]*' /tmp/restamp_base.log | tail -1")
@@ -226,11 +255,22 @@ start_dev_chain() {
 
     # height_slice_viz だけは launch を使わず手動。mapping_real.launch.py の中では
     # cloud_in が /utlidar/cloud に直結されていて、上記5の理由で床除去が壊れるため
+    #
+    # imu_topic: 2026-11-03、歩行中の機体の傾き(実測ピッチ±5度程度)でfloor_zの判定が
+    # 崩れ、1m未満ビームが最大90%に達する(床を障害物として誤検出)ことが判明。
+    # ekf_real.launch.pyと同じ /go2_state_bridge/imu を渡し、重力方向基準で判定させる
+    # 2026-11-04: cloud_inをcloud_base_restamped(非デスキュー)からcloud_deskewed_restamped
+    # (ファームウェアが動き歪みを補正済み、frame_id=odom)へ切替検証。height_slice_vizは
+    # tf2でmsg.header.frame_id(=odom)->target_frame(=base_link)を変換するため、入力が
+    # どのframe_idでも動く作りになっている(コード変更不要)
     start_node "$DEV" "height_slice_viz" "lib/go2_localization/height_slice_viz" /tmp/hsv.log \
-        "$DEV_SH; exec ros2 run go2_localization height_slice_viz --ros-args \
+        "$DEV_SH; export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1; \
+         exec ros2 run go2_localization height_slice_viz --ros-args \
              -r __node:=height_slice_viz --params-file $CFG \
              -p use_sim_time:=false -p floor_z:=$FLOOR_Z \
-             -r cloud_in:=/utlidar/cloud_base_restamped \
+             -p imu_topic:=/go2_state_bridge/imu \
+             -p pose_topic:=/utlidar/robot_odom_restamped -p odom_floor_z:=-0.05 \
+             -r cloud_in:=/utlidar/cloud_deskewed_restamped \
              -r cloud_filtered:=/go2_localization/chin_lidar_scan_points" || return 1
 }
 
@@ -310,8 +350,32 @@ start_slam() {
     log "  スキャンの取りこぼし無し"
 }
 
+start_scanmatcher() {
+    log "7. scanmatcher(3D検証経路、既存の2D経路=height_slice_viz/slam_toolboxとは並走・独立)"
+    # 2026-11-12、docs/手順/3D点群スキャンマッチング(NDT)起動手順.md で検証・採用した設定。
+    # 入力はdriver側で既に中継済みの /utlidar/cloud_base_restamped と
+    # /go2_state_bridge/imu(どちらもstart_driver_nodesで起動済み)で、2D経路(height_slice_viz
+    # 以降)とは別の独立した経路。global_frame_idは標準設定の"map"のままだと、
+    # slam_toolboxが管理する既存の"map"フレーム(map->odom)とTFの親が競合するため、
+    # "sm_map"に変更して完全に独立させている(map->base_linkを直接発行、use_odom:falseのため
+    # odom->base_linkは発行しない=EKFの出力と衝突しない)
+    local sm_run_cmd="$DEV_SM_SH; exec ros2 run scanmatcher scanmatcher_node --ros-args -r input_cloud:=/utlidar/cloud_base_restamped -r imu:=/go2_state_bridge/imu --params-file $CFG_SM -p global_frame_id:=sm_map"
+
+    start_node "$DEV" "scanmatcher" "lib/scanmatcher/scanmatcher_node" /tmp/scanmatcher.log \
+        "$sm_run_cmd" || return 1
+
+    # 既知のping不安定(本体メイン基板.161、断続的に接続が切れる)で入力点群が途切れると、
+    # scanmatcherの姿勢推定が大きく破綻する(2026-11-12実機確認: ロール-122度・ピッチ-22度等)。
+    # scanmatcherには途切れ後の復帰サービスが無いため、監視して自動再起動する
+    # (地図は失うが、姿勢が壊れたまま使い続けるよりは安全という判断)
+    local watchdog_py=/home/ros/ros2_ws/src/go2_localization/scripts/scanmatcher_gap_watchdog.py
+    local watchdog_cmd="$DEV_SH; exec python3 $watchdog_py /utlidar/cloud_base_restamped \"$sm_run_cmd\""
+    start_node "$DEV" "scanmatcher_watchdog" "scanmatcher_gap_watchdog.py" /tmp/scanmatcher_watchdog.log \
+        "$watchdog_cmd" || return 1
+}
+
 start_motion() {
-    log "7. 走行系"
+    log "8. 走行系"
     echo "[real_up]   ** 機体が動く経路を有効にする。周囲の安全と、estop.shを打てる別ターミナルを確保すること **"
     echo "[real_up]   ** Unitree Goアプリで「通常モード」にしておくこと(AIモードだと脚が出ない) **"
     start_node "$DEV" "cmd_vel_safety" "cmd_vel_safety/cmd_vel_safety_node" /tmp/safety.log \
@@ -323,7 +387,7 @@ start_motion() {
 }
 
 cmd_up() {
-    local with_motion=$1
+    local with_motion=$1 with_scanmatcher=$2
     check_preconditions
     start_containers
     check_dds
@@ -331,6 +395,7 @@ cmd_up() {
     start_dev_chain    || die "dev側の起動に失敗"
     check_floor_removal || die "床除去の検定に失敗。この状態でslam_toolboxを上げると地図に床が焼き付く"
     start_slam         || die "slam_toolboxの起動に失敗"
+    [ "$with_scanmatcher" = yes ] && { start_scanmatcher || die "scanmatcherの起動に失敗"; }
     [ "$with_motion" = yes ] && { start_motion || die "走行系の起動に失敗"; }
 
     echo
@@ -342,6 +407,17 @@ cmd_up() {
 [real_up]   地図を見る : docker exec -it $DEV bash -c 'source /opt/ros/humble/setup.bash; rviz2'
 [real_up]                (Fixed Frame: map / トピック /go2_localization/map)
 MSG
+    if [ "$with_scanmatcher" = yes ]; then
+        cat <<MSG
+[real_up]   scanmatcher(3D検証経路、2D経路と並走・独立):
+[real_up]                Fixed Frame: sm_map / 推定姿勢: /current_pose / 地図: /map (PointCloud2)
+[real_up]                ログ: docker exec $DEV cat /tmp/scanmatcher.log
+[real_up]                ping不安定の原因調査用に、途切れを検知した瞬間を自動でパケット
+[real_up]                キャプチャしたい場合(要: 事前に一度だけ
+[real_up]                sudo setcap cap_net_raw,cap_net_admin=eip \$(which tcpdump)):
+[real_up]                  ./docker/driver/capture_on_gap.sh &
+MSG
+    fi
     if [ "$with_motion" = yes ]; then
         cat <<MSG
 [real_up]   非常停止   : docker exec -it $DRIVER bash -c 'source /setup_dds.sh; ros2 run go2_sport_bridge estop.sh'
@@ -364,20 +440,22 @@ MSG
 }
 
 WITH_MOTION=no
+WITH_SCANMATCHER=no
 ACTION=up
 for arg in "$@"; do
     case "$arg" in
-        up)        ACTION=up ;;
-        down)      ACTION=down ;;
-        status)    ACTION=status ;;
-        --motion)  WITH_MOTION=yes ;;
-        -h|--help) sed -n '2,14p' "${BASH_SOURCE[0]}"; exit 0 ;;
-        *)         die "不明な引数: $arg (up|down|status|--motion)" ;;
+        up)             ACTION=up ;;
+        down)           ACTION=down ;;
+        status)         ACTION=status ;;
+        --motion)       WITH_MOTION=yes ;;
+        --scanmatcher)  WITH_SCANMATCHER=yes ;;
+        -h|--help) sed -n '2,15p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        *)         die "不明な引数: $arg (up|down|status|--motion|--scanmatcher)" ;;
     esac
 done
 
 case "$ACTION" in
-    up)     cmd_up "$WITH_MOTION" ;;
+    up)     cmd_up "$WITH_MOTION" "$WITH_SCANMATCHER" ;;
     down)   cmd_down ;;
     status) cmd_status ;;
 esac

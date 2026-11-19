@@ -1,0 +1,78 @@
+# RKO-LIO(lidar_slam_ros2)向けGo2用オーバーライド設定。2026-11-11の検証で以下の順に
+# 突き詰めて到達した設定(v4)。経緯はmemory/docs参照。
+#
+# 【2026-11-12追記・重要な訂正】本ファイル作成当初「最終誤差0.05m」としていたが、これは
+# online_node(リアルタイム処理、バッファ詰まりで全体の29%のフレームしか処理できていな
+# かった)の結果に基づく、生存者バイアスのかかった楽観的な評価だった。offline_node(フレ
+# ームを一切間引かない)で全フレームを処理した実際の結果は、最終誤差12.58m・5m超ズレ
+# 648/3552(約18%)と、実用レベルには届いていない。
+# さらにその後の検証で、同リポジトリ内の別フロントエンド`scanmatcher`(NDT、
+# `use_odom: false`)が、異なる3条件(本命・マーカー設置・9月の場所)で5m超ズレ0件
+# (最終誤差1.3〜1.6m。当初「0.01〜0.02m」としていたのは記録ファイル末尾に混入していた
+# 偽のデータ点による誤りで訂正済み)という、本設定(RKO-LIO)を上回る結果を示した。
+# ただし再現性には要注意(同条件再実行で悪化するケースを確認済み)。
+# 詳細・現時点の推奨設定は`docs/手順/3D点群スキャンマッチング(NDT)起動手順.md`参照。
+# 本ファイルはRKO-LIO検証の記録として残すが、新規に採用する設定ではない。
+#
+# - /utlidar/cloud_base_restampedの"time"フィールド(スキャン内相対時刻、0〜約0.07s)を
+#   自動判定(heuristic)できずクラッシュするため、force_relativeを明示指定
+# - voxel_size/min_range/max_rangeとその他多数のパラメータは、upstream RKO-LIOの
+#   ベンチマークデータ(bench_report/data/grandtour/.../mgo2.yaml、Go2系統の実戦投入済み
+#   設定)をベースにした。独自に細かくしたvoxel_size=0.1は、むしろ対応点探索を
+#   脆くしていた(粗くするとさらに悪化する別の壊れ方になる非単調な挙動も確認)
+# - bump_image_registration系は、脚ロボット特有の「平坦な地面での登録のすべり」対策
+#   (upstream側のGrandTour ARC-3での既知の失敗ケース名が実装コメントに残っている)
+# - enable_kidnap_relocalization/reset_on_registration_failureは、著者はデフォルトで
+#   オフ(「停止して手動確認」が前提)としているが、**オフのままでは最初の1回の追跡失敗で
+#   以降ずっと復帰不能になる**ことを実測で確認(IMUのみのdead-reckoningで姿勢が二度と
+#   マッチしないレベルまでズレる)。一方デフォルトの再配置探索コスト(yaw_samples=24 x
+#   pose_stride=10、最大約9,600回のICP、登録専用スレッド1本のみ)は、探索中に新規フレームの
+#   バッファが溢れて古いフレームを捨て続ける→再配置完了時にはさらに溜まって再び失敗、という
+#   無限ループ(バッファ暴走)を引き起こしていた。オン・オフどちらも単独では駄目で、
+#   「オンのまま探索コストを約10分の1に削る」のが現時点の最適解
+/**:
+    ros__parameters:
+        lidar_timestamps.force_relative: true
+        deskew: true
+        voxel_size: 0.25
+        max_range: 100.0
+        min_range: 0.7
+        initialization_phase: true
+        double_downsample: true
+        max_iterations: 50
+        convergence_criterion: 3.0e-05
+        icp_keypoint_voxel_multiplier: 2.25
+        publisher_queue_depth: 128
+        initialization_max_gyro_rad_s: 0.02
+        max_expected_jerk: 1000.0
+        close_scene_max_median_range: 12.0
+        close_scene_max_correspondence_distance: 0.25
+        close_scene_localizability_boost: 10.0
+        close_scene_localizability_normal_only: true
+        close_scene_min_inlier_fraction: 0.6
+        min_icp_keypoints: 100
+        keypoint_shortfall_voxel_multiplier: 1.0
+        bump_image_registration: true
+        bump_image_max_rotation_correction_deg: 2.0
+        bump_image_rotation_fallback_window: 10
+        bump_image_rotation_fallback_min_count: 3
+        bump_image_point_to_point_weight: 1.0
+        bump_image_point_to_point_start_distance: 3.0
+        output_filter_position_sigma: 0.02
+        output_filter_acceleration_noise: 0.001
+        output_filter_bias_noise: 0.0001
+        start_standstill_radius: 1.0
+        start_standstill_hold: true
+        start_standstill_hold_radius: 0.05
+        start_standstill_bias: interval
+        start_standstill_bias_static_only: true
+        moving_start_gravity_window_sec: 2.0
+        moving_start_gravity_output_only: true
+        enable_kidnap_relocalization: true
+        reset_on_registration_failure: true
+        relocalize_after_scan_gap: true
+        relocalization_yaw_samples: 6
+        relocalization_pose_stride: 30
+        relocalization_max_iterations: 8
+        max_scan_delta_sec: 1.0
+        recovery_min_failures: 1

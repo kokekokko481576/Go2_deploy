@@ -26,3 +26,14 @@ ros2_ws/src/go2_path_following/scripts/results/
 
 # inspect_run.py の実行ログ(inspect_*.log)。実行するたびに生成されるのでローカル限定
 tools/logs/
+
+# 実機SLAM調査(#13)のrosbag録画・再生データ(数GB規模)と、検証中に作った実験用地図。
+# いずれも手元での切り分け作業の産物でローカル限定
+# (ros2_ws/bags/tools/ のうちREADME.mdに挙げた検証用ツールだけは git add -f で管理している)
+ros2_ws/bags/
+ros2_ws/map_real_*.pgm
+ros2_ws/map_real_*.yaml
+
+# scanmatcher_gap_watchdog.pyがギャップ検知時に書く合図ファイル(実行時に生成・更新される
+# だけのランタイム成果物。capture_on_gap.shがこれを監視する)
+ros2_ws/src/go2_localization/scripts/.gap_trigger

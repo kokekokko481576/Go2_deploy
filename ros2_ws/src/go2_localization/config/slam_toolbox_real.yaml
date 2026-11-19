@@ -29,3 +29,13 @@ slam_toolbox:
     # (go2_localizationのamcl.yamlのupdate_min_a/dと同じ考え方)
     minimum_travel_distance: 0.2
     minimum_travel_heading: 0.2
+
+    # 2026-11-03: 四足歩行の振動・姿勢変動でスキャンマッチングが乱れやすいことへの緩和策
+    # (参考: https://dev.classmethod.jp/articles/go2-patrol-slam_toolbox/)。本質的な対策は
+    # height_slice_vizのIMU姿勢補正(imu_topicパラメータ)だが、それでも残るノイズ・ドリフトを
+    # ここでも吸収する
+    throttle_scans: 3                        # 3回に1回だけ採用し、不安定なスキャンを間引く
+    correlation_search_space_dimension: 0.5  # 既定0.3より広げ、ドリフトに耐える
+    loop_search_space_dimension: 8.0         # ループクロージャを検出しやすくし、一周で累積ドリフトを補正
+    loop_match_minimum_response_coarse: 0.4
+    loop_match_minimum_response_fine: 0.45

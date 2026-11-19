@@ -24,6 +24,7 @@
   <depend>slam_toolbox</depend>
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
   <depend>sensor_msgs_py</depend>
   <depend>tf2_ros</depend>
 

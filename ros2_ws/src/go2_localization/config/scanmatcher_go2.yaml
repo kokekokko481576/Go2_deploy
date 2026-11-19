@@ -1,0 +1,53 @@
+# scanmatcher(lidar_slam_ros2内の、RKO-LIOとは別の既存フロントエンド)向けGo2用設定。
+# 2026-11-12の検証で、RKO-LIO(rko_lio_go2.yaml)を上回る結果を再現した現時点の推奨設定。
+# 詳細: docs/手順/3D点群スキャンマッチング(NDT)起動手順.md
+#
+# - registration_method/ndt_*: NDTによる3D点群マッチング(RKO-LIOのICP系より、この
+#   疎な顎LiDARデータに対して頑健だったアルゴリズム)
+# - ndt_num_threads: 4(2026-11-12変更、既定0=自動/全コア使用から) — 実機でPC側CPUが
+#   1020%(16コア中10コア分)に達する場面を確認し、一時的に「PC側CPU過負荷がping不安定の
+#   原因」と疑ったが、スレッド数を4に絞ってCPU使用率を下げても、全く同じ周期・長さの
+#   ギャップが再発したため、CPU過負荷説は誤りと判明(撤回)。この値は「副作用なくCPU
+#   負荷を下げられる」という理由だけで残している。根本原因は本体(.161)側の間欠的な
+#   不安定さ(2026-11-05から既知)のままで未解決。詳細: memory go2-real-slam.md
+# - voxel/trans_for_mapupdate/scan_max_range: 部屋の規模(数m)に合わせて既定値
+#   (ndt_resolution=5.0, vg_size_for_input=0.2等)から縮小
+# - use_odom: false — 当初はロボット純正の脚オドメトリ(/utlidar/robot_odom_restamped、
+#   TF odom→base_link経由)を姿勢予測の事前情報として使うuse_odom:trueを試したが、
+#   TFタイミング競合(SpinningTransformListenerのポーリング間隔が粗く、脚オドメトリTFが
+#   LiDAR処理に追いつかない)を修正してなお精度が悪化した(5m超ズレが2.8%→16.4%に悪化)。
+#   脚オドメトリ事前情報の実装自体に座標系・符号・単位等の不具合がある疑いが強く、
+#   完全に無効化した状態(本設定)が3条件とも最も安定(5m超ズレ0件)という結果になった
+# - use_imu: true(2026-11-12変更) — 当初false(デスキューもIMUによる重力・姿勢補正も
+#   同時に無効化されることに後で気づいた)だったが、use_odom:falseの一部の実行で
+#   重力方向の推定が徐々にずれて蓄積する致命的なドリフト(Z座標が滑らかに単調増加し続け、
+#   5m超ズレ56.4%まで悪化)を確認。use_imu:trueに切り替えて2bag・計4回再試行したところ、
+#   このドリフトパターンは一度も再発しなかった(Z座標がノイズ状に上下動するのみ)ため、
+#   標準設定として採用
+/**:
+    ros__parameters:
+        global_frame_id: map
+        robot_frame_id: base_link
+        odom_frame_id: odom
+        registration_method: "NDT"
+        ndt_resolution: 0.3
+        ndt_num_threads: 4
+        ndt_transformation_epsilon: 0.01
+        ndt_max_iterations: 35
+        trans_for_mapupdate: 0.2
+        vg_size_for_input: 0.1
+        vg_size_for_map: 0.05
+        min_points_for_scan: 50
+        scan_min_range: 0.1
+        scan_max_range: 15.0
+        set_initial_pose: true
+        initial_pose_x: 0.0
+        initial_pose_y: 0.0
+        initial_pose_z: 0.0
+        initial_pose_qx: 0.0
+        initial_pose_qy: 0.0
+        initial_pose_qz: 0.0
+        initial_pose_qw: 1.0
+        publish_tf: true
+        use_imu: true
+        use_odom: false
